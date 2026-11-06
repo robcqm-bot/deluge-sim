@@ -1,0 +1,15 @@
+# build artifacts
+build/
+*.exe
+*.obj
+*.o
+
+# private/local session files (not part of the public project)
+todo+s001.md
+
+# local tools (portable toolchains live outside the repo)
+tools/
+
+# OS noise
+Thumbs.db
+.DS_Store
