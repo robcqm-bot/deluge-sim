@@ -7,6 +7,13 @@
 //       k=v     : unprefixed applies to EVERY fx in the chain that has
 //                 that parameter; prefixed "fx.k=v" only to that fx.
 //       --block : frames per render block
+//   simcli golden --engine tape|fet76|opto|eq|plate --frames N --out FILE
+//                 [k=v ...]
+//       renders a deterministic test signal (stereo 1 kHz sine, peak
+//       0.5) through ONE engine instance (default params + k=v) and
+//       writes golden vectors as JSON: input/output interleaved Q2.29
+//       int32 + sample rate + engine + effective params. The firmware
+//       must reproduce output_q31 EXACTLY from input_q31 (see M1).
 //   simcli help
 //
 // THE ADAPTERS live here (the only bounded bridge between
@@ -15,11 +22,16 @@
 // =====================================================================
 #include "deluge_sim/engine.hpp"
 #include "deluge_sim/preset.hpp"
+#include "deluge_sim/q31_bridge.hpp"
 #include "deluge_sim/wav_io.hpp"
 #include "fx_factory.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <sstream>
@@ -35,7 +47,7 @@ using namespace deluge_sim;
 
 void print_usage() {
     std::cout <<
-        "deluge-sim v0.7 (offline DSP harness + board simulator)\n"
+        "deluge-sim v0.8 (offline DSP harness + board simulator)\n"
         "Uso:\n"
         "  simcli render --in ENTRADA.wav --out SALIDA.wav [--chain a,b,...]"
         " [--preset FILE] [k=v ...] [--block N]\n"
@@ -51,6 +63,12 @@ void print_usage() {
         "    k tape:  drive_db bias_pct trim_db\n"
         "    prefijo por fx: fet76.ratio=8 opto.knee_db=3\n"
         "  simcli preset --save FILE [--chain a,b] [k=v ...] | --load FILE\n"
+        "  simcli golden --engine tape|fet76|opto|eq|plate --frames N"
+        " --out FILE [k=v ...]\n"
+        "    vectores dorados Q2.29 (JSON): seno 1 kHz 0.5 estéreo,"
+        " una instancia del motor,\n"
+        "    params por defecto (+k=v, solo claves del motor); N se"
+        " recorta a [128,48000]\n"
         "  simcli help\n";
 }
 
@@ -343,6 +361,186 @@ int cmd_preset(int argc, char** argv) {
     return 0;
 }
 
+// ------------------------- golden command ----------------------------
+//   simcli golden --engine tape|fet76|opto|eq|plate --frames N --out FILE
+//                 [k=v ...]
+//
+// Writes the M1 golden-vectors file: the DETERMINISTIC contract the
+// firmware must reproduce sample-exactly.
+//
+// JSON format "deluge-sim-golden-v1" (free-form but stable):
+//   {
+//     "format": "deluge-sim-golden-v1",
+//     "engine": "tape",                   // one engine, default params
+//     "sample_rate": 48000,               // fixed harness rate
+//     "frames": 480,
+//     "channels": 2,
+//     "block": 512,                       // render cadence (kDefaultMaxBlock)
+//     "q31_scale": 536870912,             // 2^29 == 1.0 (Q2.29, see
+//                                         // deluge_sim/q31_bridge.hpp)
+//     "test_signal": "stereo sine 1000 Hz peak 0.5 phase 0",
+//     "params": { "drive_db": 6, ... },   // EFFECTIVE params used
+//                                         // (defaults + k=v, %.17g)
+//     "input_q31":  [l0, r0, l1, r1, ...],  // 2*frames int32, interleaved
+//     "output_q31": [l0, r0, l1, r1, ...]   // same layout, after engine
+//   }
+// The float render path never touches WAV (no extra quantization): the
+// only quantization step is the documented float->q31 bridge at the
+// JSON boundary. The firmware check is int32 equality per sample.
+int cmd_golden(int argc, char** argv) {
+    std::string engine, out;
+    double frames_in = 0.0;
+    bool frames_seen = false;
+    std::map<std::string, double> kv;
+
+    for (int i = 0; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "--engine" && i + 1 < argc) { engine = argv[++i]; }
+        else if (a == "--out" && i + 1 < argc) { out = argv[++i]; }
+        else if (a == "--frames" && i + 1 < argc) {
+            if (!parse_double(argv[++i], frames_in)) {
+                std::cerr << "ERROR: --frames debe ser un numero: '" << argv[i]
+                          << "'\n";
+                return 2;
+            }
+            frames_seen = true;
+        } else if (a.find('=') != std::string::npos) {
+            std::string k = a.substr(0, a.find('=')), v = a.substr(a.find('=') + 1);
+            double d = 0.0;
+            if (!parse_double(v, d)) {
+                std::cerr << "ERROR: valor numérico inválido en '" << a << "'\n";
+                return 2;
+            }
+            kv[k] = d;
+        } else {
+            std::cerr << "ERROR: argumento no reconocido: '" << a << "'\n";
+            print_usage();
+            return 2;
+        }
+    }
+
+    if (fx_keys().count(engine) == 0) {
+        std::cerr << "ERROR: motor desconocido: '" << engine
+                  << "' (válidos: fet76 opto eq plate tape)\n";
+        return 2;
+    }
+    if (out.empty()) {
+        std::cerr << "ERROR: --out FILE es obligatorio\n";
+        print_usage();
+        return 2;
+    }
+    if (!frames_seen || frames_in < 1.0) {
+        std::cerr << "ERROR: --frames N es obligatorio (rango [128,48000],"
+                     " se recorta)\n";
+        return 2;
+    }
+    const double nf = std::min(48000.0, std::max(128.0, frames_in));
+    const size_t frames = size_t(std::llround(nf));
+    if (nf != frames_in)
+        std::cout << "AVISO: --frames ajustado a " << frames
+                  << " (rango [128,48000])\n";
+
+    // Only keys of the chosen engine (simplified cmd_render parsing).
+    const std::vector<const char*>& valid = fx_keys().at(engine);
+    for (const auto& entry : kv) {
+        const std::string& k = entry.first;
+        if (std::find(valid.begin(), valid.end(), k) == valid.end()) {
+            std::cerr << "ERROR: parámetro desconocido para el motor "
+                      << engine << ": '" << k << "'\nVálidos:";
+            for (const char* vk : valid) std::cerr << ' ' << vk;
+            std::cerr << "\n";
+            return 2;
+        }
+    }
+
+    // One engine instance: defaults + k=v (fx_factory is the single
+    // source of truth for keys and defaults; it builds the adapters).
+    const std::map<std::string, double> pm = effective_fx_params(kv, engine);
+    std::unique_ptr<IProcessor> proc = make_fx(engine, pm);
+    if (!proc) {                             // unreachable: engine validated
+        std::cerr << "ERROR: motor desconocido: '" << engine << "'\n";
+        return 2;
+    }
+
+    // Deterministic test signal: 1 kHz stereo sine, peak 0.5, phase 0.
+    const uint32_t sr = 48000;
+    std::vector<float> L(frames), R(frames);
+    for (size_t i = 0; i < frames; ++i) {
+        const float v = float(0.5 * std::sin(2.0 * 3.14159265358979323846 *
+                                             1000.0 * double(i) / double(sr)));
+        L[i] = v;
+        R[i] = v;
+    }
+
+    // Input vectors FIRST (process() is in-place), then render through
+    // the single instance in blocks of kDefaultMaxBlock (the Engine's
+    // default cadence). No WAV round-trip anywhere.
+    std::vector<int32_t> in_q31(frames * 2), out_q31(frames * 2);
+    interleave_q31_from_planar(L.data(), R.data(), in_q31.data(), frames);
+
+    ProcessContext ctx;                      // default: stereo, 48 kHz
+    ctx.sample_rate = double(sr);
+    ctx.max_block = kDefaultMaxBlock;
+    ctx.channels = 2;
+    proc->prepare(ctx);
+    for (size_t off = 0; off < frames; off += kDefaultMaxBlock) {
+        Block b;
+        b.L = L.data() + off;
+        b.R = R.data() + off;
+        b.frames = std::min(kDefaultMaxBlock, frames - off);
+        b.channels = 2;
+        proc->process(b);
+    }
+    interleave_q31_from_planar(L.data(), R.data(), out_q31.data(), frames);
+
+    std::ofstream f(out);
+    if (!f) {
+        std::cerr << "ERROR: no se puede escribir: '" << out << "'\n";
+        return 4;
+    }
+    auto write_array = [&](const char* key, const std::vector<int32_t>& v) {
+        f << "  \"" << key << "\": [";
+        for (size_t i = 0; i < v.size(); ++i) {
+            if (i) f << ',';
+            if (i && i % 8 == 0) f << "\n    ";
+            else if (i) f << ' ';
+            f << static_cast<long long>(v[i]);
+        }
+        f << "\n  ]";
+    };
+    f << "{\n"
+      << "  \"format\": \"deluge-sim-golden-v1\",\n"
+      << "  \"engine\": \"" << engine << "\",\n"
+      << "  \"sample_rate\": " << sr << ",\n"
+      << "  \"frames\": " << frames << ",\n"
+      << "  \"channels\": 2,\n"
+      << "  \"block\": " << kDefaultMaxBlock << ",\n"
+      << "  \"q31_scale\": " << kQ31Unity << ",\n"
+      << "  \"test_signal\": \"stereo sine 1000 Hz peak 0.5 phase 0\",\n"
+      << "  \"params\": {";
+    bool first_p = true;
+    for (const auto& [k, v] : pm) {
+        char num[40];
+        std::snprintf(num, sizeof(num), "%.17g", v);
+        f << (first_p ? "\n" : ",\n") << "    \"" << k << "\": " << num;
+        first_p = false;
+    }
+    f << (first_p ? "},\n" : "\n  },\n");
+    write_array("input_q31", in_q31);
+    f << ",\n";
+    write_array("output_q31", out_q31);
+    f << "\n}\n";
+    f.close();
+    if (!f) {
+        std::cerr << "ERROR: falló la escritura de: '" << out << "'\n";
+        return 4;
+    }
+    std::cout << "OK  golden: " << out << " (engine=" << engine
+              << ", frames=" << frames
+              << ", entrada/salida Q2.29 intercaladas)\n";
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -351,6 +549,7 @@ int main(int argc, char** argv) {
     if (cmd == "help" || cmd == "--help" || cmd == "-h") { print_usage(); return 0; }
     if (cmd == "render") return cmd_render(argc - 2, argv + 2);
     if (cmd == "preset") return cmd_preset(argc - 2, argv + 2);
+    if (cmd == "golden") return cmd_golden(argc - 2, argv + 2);
     std::cerr << "ERROR: comando desconocido: '" << cmd << "'\n";
     print_usage();
     return 2;

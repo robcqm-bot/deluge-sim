@@ -5,6 +5,7 @@
 #include "board_core.hpp"
 #include "deluge_sim/engine.hpp"
 #include "deluge_sim/preset.hpp"
+#include "deluge_sim/q31_bridge.hpp"
 #include "deluge_sim/stream_source.hpp"
 #include "deluge_sim/wav_io.hpp"
 #include "fx_factory.hpp"
@@ -1142,11 +1143,12 @@ void test_engine_chain_plate() {
 #include "test_stream.inc"
 #include "test_preset.inc"
 #include "test_board_preset.inc"
+#include "test_q31_bridge.inc"
 
 } // namespace
 
 int main() {
-    std::cout << "deluge-sim :: simtests v0.7\n";
+    std::cout << "deluge-sim :: simtests v0.8\n";
     test_wav_roundtrip();
     test_fet76_no_gr();
     test_fet76_gr_steady();
@@ -1199,6 +1201,11 @@ int main() {
     test_sdcard_presets();
     test_fx_factory();
     test_preset_chain_in_pump();
+    test_q31_roundtrip_grid();
+    test_q31_clamp();
+    test_q31_symmetry();
+    test_q31_sine_1lsb();
+    test_q31_interleave_planar();
     if (g_failures == 0) {
         std::cout << "RESULTADO: TODO OK\n";
         return 0;

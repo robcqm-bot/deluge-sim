@@ -22,6 +22,7 @@ add_library(deluge_sim_lib STATIC
     src/engine.cpp
     src/stream_source.cpp
     src/preset.cpp
+    src/q31_bridge.cpp
 )
 target_include_directories(deluge_sim_lib PUBLIC include)
 
