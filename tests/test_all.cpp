@@ -2,6 +2,7 @@
 // deluge-sim / test_all.cpp — Batería de verificación (binario simtests)
 // Cada prueba lleva su expectativa MATEMÁTICA documentada. Exit 0 = todo ok.
 // =====================================================================
+#include "board_core.hpp"
 #include "deluge_sim/engine.hpp"
 #include "deluge_sim/wav_io.hpp"
 #include "suite_core/fet76_ref.hpp"
@@ -9,8 +10,11 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <limits>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace {
@@ -237,10 +241,176 @@ void test_engine_end_to_end() {
     check(finite, "salida del engine finita");
 }
 
+// --------------------- pruebas board (fase 2, v0.2) ------------------
+
+// Procesador blanco: ganancia exacta x0.5 (multiplicación por potencia
+// de 2 => exacta en IEEE-754, sin redondeo).
+class GainHalf : public IProcessor {
+public:
+    const char* name() const override { return "gain_half_test"; }
+    void prepare(const ProcessContext&) override {}
+    void process(Block& b) override {
+        for (size_t i = 0; i < b.frames; ++i) {
+            b.L[i] *= 0.5f;
+            if (b.channels == 2) b.R[i] *= 0.5f;
+        }
+    }
+    void reset() override {}
+};
+
+void test_board_sdcard() {
+    std::cout << "[test] sdcard: carpeta con 2 wav y 1 otro -> exactamente 2 canciones\n";
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    std::string dir = (fs::temp_directory_path() /
+                       "deluge_sim_test_sd").string();
+    fs::remove_all(dir, ec);                                // limpia corrida previa
+    fs::create_directories(dir);
+    std::string err;
+    // Archivos de prueba: 2 wav (nombres invertidos para probar el orden),
+    // 1 no-wav que NO debe contar y 1 subdirectorio que tampoco.
+    { std::ofstream f(dir + "/bbb.wav"); f << 'x'; }
+    { std::ofstream f(dir + "/aaa.wav"); f << 'x'; }
+    { std::ofstream f(dir + "/ccc.txt"); f << 'x'; }
+    fs::create_directories(dir + "/sub.wav");
+    deluge_sim::board::SdCard sd;
+    bool ok = sd.mount(dir, err);
+    check(ok, "montaje de carpeta SD");
+    check(ok && sd.song_count() == 2, "solo los *.wav cuentan (2, no 3 ni 4)");
+    check(ok && sd.song_count() == 2 &&
+              sd.songs()[0].find("aaa.wav") != std::string::npos &&
+              sd.songs()[1].find("bbb.wav") != std::string::npos,
+          "orden alfabético por ruta");
+    deluge_sim::board::SdCard bad;
+    check(!bad.mount(dir + "/no_existe", err) && !err.empty(),
+          "carpeta inexistente -> error accionable");
+    fs::remove_all(dir, ec);
+}
+
+void test_board_pads() {
+    std::cout << "[test] pads: toggles exactos y pads de rol (play/bypass)\n";
+    deluge_sim::board::PadGrid g;
+    check(!g.is_playing() && !g.is_bypassed(), "arranque: todo apagado");
+    check(!g.toggle(8, 0) && !g.toggle(0, 8) && !g.toggle(-1, 0),
+          "fuera de rango -> false");
+    g.set_playing(true);
+    g.set_bypassed(true);
+    check(g.is_playing() && g.is_bypassed() && g.is_lit(0, 0) && g.is_lit(0, 1),
+          "pads de rol reflejan play/bypass");
+    bool v = g.toggle(3, 4);
+    check(v && g.is_lit(3, 4), "pad libre encendido por toggle");
+    v = g.toggle(3, 4);
+    check(!v && !g.is_lit(3, 4), "pad libre apagado por segundo toggle");
+    g.all_off();
+    int lit = 0;
+    for (int r = 0; r < deluge_sim::board::kPadRows; ++r)
+        for (int c = 0; c < deluge_sim::board::kPadCols; ++c)
+            lit += g.is_lit(r, c) ? 1 : 0;
+    check(lit == 0, "all_off apaga los 64 pads");
+}
+
+void test_board_clock() {
+    std::cout << "[test] clock: matemática 48k / bloque 128\n";
+    deluge_sim::board::BoardClock c;                        // 48000 Hz, 128
+    check(std::fabs(c.audio_seconds(48000) - 1.0) < 1e-12,
+          "48000 marcos == 1.000 s exacto");
+    check(std::fabs(c.block_ms() - 8.0 / 3.0) < 1e-9,
+          "bloque 128 == 2.666... ms (8/3)");
+    check(c.frames_for(1.0) == 48000 && c.frames_for(0.0) == 0,
+          "frames_for redondeo al marco más próximo");
+    check(std::fabs(c.audio_seconds(c.hw_block) * 1000.0 - c.block_ms()) < 1e-12,
+          "block_ms coherente con audio_seconds");
+}
+
+void test_board_pump_cadence() {
+    std::cout << "[test] pump: cadencia fija 1000 marcos @128 (7x128 + 104 + fin)\n";
+    WavData in = make_sine(48000, 1000, 0.5);               // 1000 marcos
+    deluge_sim::board::BoardClock c;
+    deluge_sim::board::BoardPump pump(c);                   // sin cadena: passthrough
+    std::string err;
+    check(pump.load_song(in, err), "carga de canción");
+    check(!pump.is_playing(), "cargada pero parada");
+    std::vector<size_t> sizes;
+    std::vector<float> out(128 * 2, 0.0f);
+    pump.start();
+    for (;;) {
+        size_t n = pump.pump(out.data(), 128);
+        if (n == 0) break;
+        sizes.push_back(n);
+    }
+    check(sizes.size() == 8, "8 llamadas con datos (7x128 + 1x104)");
+    bool seq_ok = sizes.size() == 8;
+    for (size_t i = 0; i < 7 && seq_ok; ++i) seq_ok = (sizes[i] == 128);
+    if (seq_ok) seq_ok = (sizes[7] == 104);
+    check(seq_ok, "secuencia exacta de bloques hardware (cadencia fija)");
+    check(!pump.is_playing(), "auto-stop al terminar la canción");
+    check(pump.stats().frames_rendered == 1000 && pump.stats().blocks_rendered == 8,
+          "telemetría: 1000 marcos en 8 bloques");
+    check(pump.pump(out.data(), 128) == 0, "llamada extra -> 0 (sin reproducir)");
+}
+
+void test_board_pump_chain_bypass() {
+    std::cout << "[test] pump: cadena aplicada, bypass exacto y guardia NaN\n";
+    WavData in = make_sine(48000, 256, 0.5);
+    deluge_sim::board::BoardClock c;
+    deluge_sim::board::BoardPump pump(c);
+    pump.add_processor(std::make_unique<GainHalf>());
+    std::string err;
+    check(pump.load_song(in, err), "carga con cadena de 1 procesador");
+    std::vector<float> out(128 * 2, 0.0f);
+    pump.start();
+    size_t got = 0, calls = 0;
+    for (;;) {
+        size_t n = pump.pump(out.data(), 128);
+        if (n == 0) break;
+        // x0.5 exacto: la salida debe ser EXACTAMENTE la mitad bit a bit.
+        for (size_t i = 0; i < n; ++i) {
+            if (out[2 * i] != in.samples[2 * (i + got)] * 0.5f) { got = size_t(-1); break; }
+            if (out[2 * i + 1] != in.samples[2 * (i + got) + 1] * 0.5f) { got = size_t(-1); break; }
+        }
+        if (got == size_t(-1)) break;
+        got += n;
+        ++calls;
+    }
+    check(got == 256, "cadena x0.5 aplicada exactamente a los 256 marcos");
+    check(calls == 2, "2 bloques (128+128) en 256 marcos");
+
+    // Bypass: sin cadena, la salida debe ser EXACTAMENTE la fuente.
+    WavData in2 = make_sine(48000, 128, 0.5);
+    deluge_sim::board::BoardPump pump2(c);
+    pump2.add_processor(std::make_unique<GainHalf>());
+    check(pump2.load_song(in2, err), "recarga con cadena");
+    pump2.set_bypass(true);
+    std::vector<float> out2(128 * 2, 0.0f);
+    pump2.start();
+    bool exact = pump2.pump(out2.data(), 128) == 128;
+    for (size_t i = 0; i < 256 && exact; ++i) exact = (out2[i] == in2.samples[i]);
+    check(exact, "bypass: salida == fuente bit a bit");
+
+    // Guardia de entrada: NaN en la canción -> sustituido y contado.
+    WavData in3 = make_sine(48000, 128, 0.5);
+    in3.samples[10] = std::numeric_limits<float>::quiet_NaN();
+    deluge_sim::board::BoardPump pump3(c);
+    check(pump3.load_song(in3, err), "carga con NaN");
+    std::vector<float> out3(128 * 2, 0.0f);
+    pump3.start();
+    pump3.pump(out3.data(), 128);
+    bool finite = true;
+    for (float v : out3) finite = finite && std::isfinite(v);
+    check(finite && pump3.stats().nonfinite_input_fixed == 1,
+          "NaN sustituido por 0 y contado (== 1)");
+
+    // Sample rate incompatible: rechazo accionable.
+    WavData in4 = make_sine(44100, 128, 0.5);
+    deluge_sim::board::BoardPump pump4(c);
+    check(!pump4.load_song(in4, err) && err.find("Hz") != std::string::npos,
+          "44100 Hz vs reloj 48000 -> rechazo con mensaje");
+}
+
 } // namespace
 
 int main() {
-    std::cout << "deluge-sim :: simtests v0.1\n";
+    std::cout << "deluge-sim :: simtests v0.2\n";
     test_wav_roundtrip();
     test_fet76_no_gr();
     test_fet76_gr_steady();
@@ -249,6 +419,11 @@ int main() {
     test_fet76_denormal_tiny();
     test_fet76_mono();
     test_engine_end_to_end();
+    test_board_sdcard();
+    test_board_pads();
+    test_board_clock();
+    test_board_pump_cadence();
+    test_board_pump_chain_bypass();
     if (g_failures == 0) {
         std::cout << "RESULTADO: TODO OK\n";
         return 0;

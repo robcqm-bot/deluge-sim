@@ -8,11 +8,17 @@ designed so that the same DSP cores can later run on embedded targets
 **v0.1 — offline harness**: load a WAV → process through a chain of
 processors → render a WAV, with zero external dependencies.
 
+**v0.2 — board simulator (phase 2)**: `board_sim`, an SDL2 target that
+mimics the board workflow — "SD card" (a host folder of WAVs), an 8×8 pad
+grid, fixed-hardware block cadence and live audio device output — so
+processors can be exercised interactively without flashing firmware. The
+core harness stays dependency-free; SDL2 is linked only by this app target.
+
 - ✅ Working reference processor: `Fet76Ref`, a textbook FET-style
   feedback compressor (stereo-linked, one-pole ballistics)
 - ✅ Dependency-free RIFF/WAV reader & writer (PCM16/24/32, float32,
   WAVE_FORMAT_EXTENSIBLE)
-- ✅ Test suite with mathematically documented expectations
+- ✅ Test suite with mathematically documented expectations (13 cases)
 - ✅ Clean module boundary ("firewall") between the host framework and
   your DSP code — see below
 
@@ -43,7 +49,8 @@ unchanged for:
 
 ## Build
 
-Requirements: a C++17 compiler. No external libraries.
+Requirements: a C++17 compiler. No external libraries for the core
+(`simcli`, `simtests`).
 
 ```bash
 # CMake (any generator)
@@ -55,10 +62,26 @@ ctest --test-dir build          # runs the acceptance suite
 ./build.sh run
 ```
 
+### Board simulator (v0.2, optional)
+
+`board_sim` needs SDL2 and is built only when SDL2 is found — the rest of
+the project builds identically without it.
+
+```bash
+# Linux (or CI): install SDL2 first
+sudo apt-get install libsdl2-dev
+
+# Windows + MinGW: point CMake at the official SDL devel package
+# (download SDL2-devel-<ver>-mingw.tar.gz from libsdl-org releases;
+#  <sdk> is the extracted SDL2-<ver>/x86_64-w64-mingw32 folder)
+cmake -S . -B build -DSDL2_SDK_DIR=/path/to/SDL2-2.32.10/x86_64-w64-mingw32
+cmake --build build --config Release   # SDL2.dll is copied next to the exe
+```
+
 ## Usage
 
 ```bash
-# run the acceptance tests (8 cases, mathematically documented)
+# run the acceptance tests (13 cases, mathematically documented)
 build/simtests.exe
 
 # render a file through the reference compressor
@@ -68,6 +91,25 @@ build/simcli.exe render --in input.wav --out output.wav \
 # parameters: thresh_db ratio attack_s release_s in_gain_db out_gain_db
 #             --block N   (frames per render block, 8..65536)
 ```
+
+### Board simulator
+
+```bash
+# list the songs found on the "SD card" (any folder with WAVs)
+build/board_sim.exe --list --sd /path/to/sd_folder
+
+# open the board window (song 0 loads ready to play)
+build/board_sim.exe --sd /path/to/sd_folder --song 0 --hw-block 128 \
+    thresh_db=-12 ratio=4
+
+# controls: SPACE play/stop | B bypass | UP/DOWN song | click pads | ESC quit
+```
+
+The board runs the same `IProcessor` chain as the CLI at a fixed hardware
+cadence (default 128-frame blocks @ 48 kHz): the UI pumps blocks to fill
+the audio device queue, exactly like an audio ISR on real hardware. The
+window shows the 8×8 pad grid, a playhead bar and the compressor GR meter.
+Pads `row0col0` (play) and `row0col1` (bypass) respond to clicks.
 
 Every render prints a report (frames, blocks, wall time, realtime factor).
 On a modern PC expect well over ×500 realtime for one compressor instance.
@@ -88,9 +130,9 @@ WAV file ──read_wav──► WavData (interleaved float)
 
 See [TODO.md](TODO.md). Highlights:
 
-1. **Phase 2 — board simulator**: an SDL2-based board target (display, pads,
-   audio device) so processors can be exercised inside a hardware-like loop
-   without flashing firmware.
+1. ~~**Phase 2 — board simulator**~~ ✅ delivered in v0.2 (`board_sim`,
+   SDL2). Next steps for it: preset/clip persistence on the "SD card" and
+   a song-browsing UI.
 2. More reference processors (opto-style, passive-EQ-style, plate-style FDN
    reverb) behind the same `IProcessor` contract.
 3. Streaming file source for very long renders.

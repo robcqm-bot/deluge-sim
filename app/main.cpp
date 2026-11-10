@@ -10,9 +10,9 @@
 // suite_core). En la integración real al firmware, este adaptador se
 // traslada a src/deluge/dsp/suite/fet76_adapter.cpp.
 // =====================================================================
+#include "adapter_fet76.hpp"
 #include "deluge_sim/engine.hpp"
 #include "deluge_sim/wav_io.hpp"
-#include "suite_core/fet76_ref.hpp"
 
 #include <cmath>
 #include <cstring>
@@ -23,31 +23,10 @@
 namespace {
 
 using namespace deluge_sim;
-using suite_core::Fet76Ref;
-
-// -------- EL ADAPTADOR (cortafuegos: deluge_sim <-> suite_core) --------
-class AdapterFet76 : public IProcessor {
-public:
-    explicit AdapterFet76(const Fet76Ref::Params& p) { f_.set_params(p); }
-    const char* name() const override { return "fet76_ref"; }
-    void prepare(const ProcessContext& ctx) override {
-        f_.set_sample_rate(ctx.sample_rate);
-        f_.prepare();
-    }
-    void process(Block& b) override {
-        f_.process(b.L, b.channels == 1 ? nullptr : b.R, b.frames);
-    }
-    void reset() override { f_.reset(); }
-    double gr_db() const { return f_.current_gr_db(); }
-    uint64_t bad_inputs() const { return f_.bad_input_count(); }
-
-private:
-    Fet76Ref f_;
-};
 
 void print_usage() {
     std::cout <<
-        "deluge-sim v0.1 (offline DSP harness)\n"
+        "deluge-sim v0.2 (offline DSP harness + board simulator)\n"
         "Uso:\n"
         "  simcli render --in ENTRADA.wav --out SALIDA.wav [k=v ...] [--block N]\n"
         "    k: thresh_db ratio attack_s release_s in_gain_db out_gain_db\n"
@@ -118,7 +97,7 @@ int cmd_render(int argc, char** argv) {
         return 3;
     }
 
-    Fet76Ref::Params p;   // defaults; se sobreescriben con los k=v presentes
+    suite_core::Fet76Ref::Params p;   // defaults; se sobreescriben con los k=v presentes
     if (kv.count("thresh_db"))   p.thresh_db   = kv["thresh_db"];
     if (kv.count("ratio"))       p.ratio       = kv["ratio"];
     if (kv.count("attack_s"))    p.attack_s    = kv["attack_s"];

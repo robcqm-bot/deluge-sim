@@ -1,4 +1,4 @@
-# ARCHITECTURE.md — deluge-sim v0.1
+# ARCHITECTURE.md — deluge-sim v0.2
 
 > (Documento de arquitectura en español — traducciones al inglés bienvenidas.)
 
@@ -9,22 +9,23 @@
 | Patrón | Dónde | Decisión |
 |---|---|---|
 | **Strategy** | `IProcessor` | Cada FX (Fet76Ref hoy, PLATE-140 mañana) es intercambiable sin tocar el motor |
-| **Pipeline** | `Engine::run` | Render por bloques: fuente → cadena ordenada → sumidero; espejo del flujo real del firmware Deluge (blocks → FX → master) |
-| **Firewall (module boundary)** | `suite_core/` vs `include/deluge_sim/` | Dos bibliotecas estáticas INDEPENDIENTES; la dependencia va en una sola dirección (`app → ambas`). Ningún header cruza la frontera. El único puente es un adaptador de ~30 líneas (`AdapterFet76` en `app/main.cpp`) |
-| **Adapter** | `AdapterFet76` | Traduce `deluge_sim::Block` (tipo del sim) → punteros crudos `float*` (tipo de suite-core). En la integración real al firmware este archivo vive en `src/deluge/dsp/suite/` |
+| **Pipeline** | `Engine::run` / `BoardPump::pump` | Render por bloques: fuente → cadena ordenada → sumidero; espejo del flujo real del firmware Deluge (blocks → FX → master) |
+| **Firewall (module boundary)** | `suite_core/` vs `include/deluge_sim/` | Dos bibliotecas estáticas INDEPENDIENTES; la dependencia va en una sola dirección (`app → ambas`). Ningún header cruza la frontera. El único puente es un adaptador de ~30 líneas (`AdapterFet76` en `app/adapter_fet76.hpp`) |
+| **Adapter** | `AdapterFet76` | Traduce `deluge_sim::Block` (tipo del sim) → punteros crudos `float*` (tipo de suite-core). En la integración real al firmware este archivo vive en `src/deluge/dsp/suite/`. Compartido por simcli y boardsim (extraído a header en v0.2) |
 | **DTO + Report** | `RunReport` | Telemetría explícita en vez de prints dispersos |
+| **Facade + composición** | `BoardPump` (v0.2) | El lazo interactivo del board REUSA `FileAudioSource`, `IProcessor` y la guardia del engine en vez de duplicar el pipeline: solo cambia el modo de conducción (cadencia fija a demanda vs batch completo) |
 
 **Decisiones clave:**
 1. **Planar stereo** (`L[]`/`R[]` separados) y no intercalado: el DSP del M7 del Deluge trabaja por canal; evita mezclas de strides en suite-core.
 2. **Memoria del bloque propiedad del Engine**, asignada UNA vez: cero allocaciones dentro del render (contrato obligatorio para IProcessor).
 3. **suite_core no enlaza deluge_sim**: así el mismo `.cpp` compila mañana para el firmware (M7), para Teensy o como VST — la razón de ser del cortafuegos.
-4. **Cero dependencias externas** en v0.1 (ni SDL ni libs): WAV I/O propio. El board-sim SDL2 interactivo es fase 2 (registrada, no implantada) — v0.1 entrega el pipeline y la zona propia VERIFICABLES hoy.
+4. **SDL2 es la primera dependencia externa (v0.2) y vive SOLO en la capa app**: el núcleo (`deluge_sim_lib`, `suite_core`, `board_core`, `simcli`, `simtests`) sigue siendo cero-dependencias; solo `board_sim` enlaza SDL2 y solo él incluye `<SDL2/SDL.h>`. En CMake el target es OPCIONAL: si no hay SDL2 se omite con un aviso y todo lo demás compila igual (ci.yml instala SDL solo en el job Ubuntu).
 
 ## 2. Folder Structure (exacta)
 
 ```
-D:\DelugeLab\deluge-sim\
-├── CMakeLists.txt                        # 4 targets (ver §5)
+deluge-sim\
+├── CMakeLists.txt                        # 6 targets (ver §6)
 ├── build.sh                              # fallback directo g++ sin CMake
 ├── README.md
 ├── TODO.md                               # roadmap público
@@ -40,9 +41,14 @@ D:\DelugeLab\deluge-sim\
 │   ├── include\suite_core\fet76_ref.hpp
 │   └── src\fet76_ref.cpp
 ├── app\
-│   └── main.cpp                          # simcli + AdapterFet76 (el puente)
+│   ├── adapter_fet76.hpp                 # EL ADAPTADOR (el puente, compartido)
+│   ├── main.cpp                          # simcli
+│   └── board_sim\                        # <<< fase 2 (v0.2)
+│       ├── board_clock.hpp               # stubs de reloj (48 kHz, bloque 128)
+│       ├── board_core.hpp/.cpp           # SdCard + PadGrid + BoardPump (SDL-free)
+│       └── board_main.cpp                # boardsim: ÚNICO archivo que enlaza SDL2
 └── tests\
-    └── test_all.cpp                      # simtests (exit 0 = aceptación)
+    └── test_all.cpp                      # simtests (exit 0 = aceptación, 13 pruebas)
 ```
 
 ## 3. Data Flow
@@ -121,4 +127,53 @@ en cada corrida — es el indicador de regresión de rendimiento del proyecto.
 - Preferido: `cmake -B build -A x64 && cmake --build build --config Release`
   → `build\Release\simtests.exe` + `simcli.exe`
 - Alternativa (MinGW/g++): `./build.sh run`
-- Puerta de aceptación: `simtests` exit 0 (8 pruebas con expectativa matemática)
+- Puerta de aceptación: `simtests` exit 0 (13 pruebas con expectativa matemática)
+- **board_sim (opcional)**: pasa `-DSDL2_SDK_DIR=<SDK>/x86_64-w64-mingw32`
+  (SDK oficial MinGW de libsdl-org; la DLL se copia junto al exe) o instala
+  `libsdl2-dev` (Linux, find_package). Sin SDL2 el target se omite con un
+  aviso y el resto del proyecto es idéntico.
+
+## 7. Board simulator (fase 2, v0.2)
+
+**Objetivo**: ejercitar los procesadores dentro de un lazo semejante al del
+hardware — cadencia fija de audio, salida por dispositivo, "SD card" de
+canciones — sin flashear firmware.
+
+**Piezas (todas SDL-free salvo el shell):**
+
+| Pieza | Qué hace | Testable headless |
+|---|---|---|
+| `board_clock.hpp` | Stubs de reloj: 48 kHz, bloque hardware de 128 marcos (2.667 ms). En silicio se sustituyen por los timers DWT/SAI del M7 | sí (matemática de conversión marcos↔tiempo) |
+| `SdCard` | "Tarjeta SD" = carpeta del host; escanea `*.wav` (extensión case-insensitive) ordenado por ruta; no abre los WAV (eso ocurre al seleccionar canción) | sí |
+| `PadGrid` | Rejilla 8×8; pads de rol fijos: `(0,0)` PLAY/STOP, `(0,1)` BYPASS; resto libres (estado visual persistente) | sí |
+| `BoardPump` | Lazo de CADENCIA FIJA: cada `pump()` entrega exactamente 1 bloque hardware (128 marcos) salvo el tramo final (resto + auto-stop). Salida intercalada 2ch lista para la cola del dispositivo | sí |
+| `board_main.cpp` | Shell SDL2: ventana con grid, cola de audio (`SDL_QueueAudio`, F32 2ch @48k), eventos (teclado/ratón), playhead y medidor GR | no (solo este archivo enlaza SDL) |
+
+**Flujo del board:**
+
+```
+SD (carpeta host) ──read_wav──► WavData (viva mientras la canción cargada)
+                                    │ FileAudioSource (reusada del engine)
+                                    ▼
+   UI (60 fps) ──mientras cola SDL < watermark──► BoardPump.pump()
+                                    │ 1 bloque hardware (128) por llamada
+                                    │ guardia no-finitos → cadena IProcessor
+                                    │ (o bypass directo a la salida)
+                                    ▼
+                        float intercalado ──SDL_QueueAudio──► dispositivo
+```
+
+**Decisiones clave del board:**
+
+1. **Cadencia fija, no streaming por hilos**: el UI bombea a demanda hasta la
+   marca de agua de cola (8 bloques ≈ 21 ms). Sin productor/consumidor por
+   hilos ni locks en v0.2 — mismo contrato futuro que la interrupción de
+   audio de la placa, y un contador de underruns como indicador.
+2. **Reuso estricto del engine**: BoardPump NO duplica el pipeline; compone
+   `FileAudioSource` + `IProcessor` + la misma guardia. El bypass salta la
+   cadena sin desmontarla (bit a bit == fuente).
+3. **SDL aislado**: solo `board_main.cpp` incluye SDL. `board_core` se compila
+   también dentro de `simtests`, por eso las 5 pruebas nuevas del board son
+   headless y matemáticas.
+4. **Sample rate incompatible = rechazo accionable** (el resample es fase
+   futura, documentada en TODO).

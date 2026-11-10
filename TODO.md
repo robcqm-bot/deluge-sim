@@ -1,9 +1,11 @@
 # TODO — deluge-sim
 
-## v0.2 — board simulator (phase 2)
-- [ ] SDL2 board target: display window, pad grid, audio device output
-- [ ] Clock/timing stubs so the render loop behaves like fixed-hardware audio
-- [ ] "SD card" = host folder (songs/presets readable directly)
+## v0.2 — board simulator (phase 2) ✅ (entregado)
+- [x] SDL2 board target: display window, pad grid, audio device output
+- [x] Clock/timing stubs so the render loop behaves like fixed-hardware audio
+- [x] "SD card" = host folder (songs/presets readable directly)
+- [ ] Siguientes: persistencia de clips/presets en la "SD" y navegador de
+      canciones en la ventana
 
 ## More reference processors (each with tests + documented expectations)
 - [ ] Opto-style compressor (slow photoresistor ballistics)
