@@ -53,6 +53,7 @@ target_link_libraries(board_core PUBLIC deluge_sim_lib)
 # ---- tests ----
 enable_testing()
 add_executable(simtests tests/test_all.cpp)
+target_include_directories(simtests PRIVATE app)   # fx_factory.hpp
 target_link_libraries(simtests PRIVATE deluge_sim_lib suite_core board_core)
 add_test(NAME all_tests COMMAND simtests)
 

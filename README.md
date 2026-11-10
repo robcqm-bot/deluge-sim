@@ -37,6 +37,13 @@ diffusion and stereo-decorrelated tap groups.
 RAM); chain presets import/export as JSON with a dependency-free mini
 parser; CI gains a Windows MinGW (MSYS2 UCRT64) job.
 
+**v0.7 — board with SD presets**: the board simulator now reads chain
+presets (`*.json`) from the "SD card" alongside songs, maps them to the
+bottom pad row (click a slot or use ←/→), rebuilds the FX chain from the
+preset with the shared `fx_factory`, and `S` saves the current chain +
+parameters back to the SD as a new preset. simcli and boardsim share one
+FX registry (keys, defaults and construction).
+
 - ✅ Working reference processors: `Fet76Ref` (textbook FET-style feedback
   compressor, stereo-linked, one-pole ballistics), `OptoCompRef`
   (opto-cell compressor with soft-knee gain law, slow photoresistor
@@ -49,7 +56,9 @@ parser; CI gains a Windows MinGW (MSYS2 UCRT64) job.
   (bit-identical output, verified by tests)
 - ✅ Chain presets (JSON, dependency-free mini parser, roundtrip
   bit-exact) + CI matrix: Windows MSVC, Ubuntu gcc, Windows MinGW
-- ✅ Test suite with mathematically documented expectations (49 cases)
+- ✅ Board simulator with SD presets: preset slots on the pad grid,
+  ←/→ to switch, `S` saves the current chain back to the SD
+- ✅ Test suite with mathematically documented expectations (52 cases)
 - ✅ Clean module boundary ("firewall") between the host framework and
   your DSP code — see below
 
@@ -143,21 +152,26 @@ build/simcli.exe render --in in.wav --out out.wav --chain fet76,opto \
 ### Board simulator
 
 ```bash
-# list the songs found on the "SD card" (any folder with WAVs)
+# list the songs AND chain presets found on the "SD card" (a host folder)
 build/board_sim.exe --list --sd /path/to/sd_folder
 
-# open the board window (song 0 loads ready to play)
-build/board_sim.exe --sd /path/to/sd_folder --song 0 --hw-block 128 \
+# open the board window (song 0 + preset slot 0 = default fet76)
+build/board_sim.exe --sd /path/to/sd_folder --song 0 --preset 1 --hw-block 128 \
     thresh_db=-12 ratio=4
 
-# controls: SPACE play/stop | B bypass | UP/DOWN song | click pads | ESC quit
+# controls: SPACE play/stop | B bypass | UP/DOWN song | LEFT/RIGHT preset slot |
+#            S save current chain as a preset on the SD | click pads | ESC quit
 ```
 
-The board runs the same `IProcessor` chain as the CLI at a fixed hardware
-cadence (default 128-frame blocks @ 48 kHz): the UI pumps blocks to fill
-the audio device queue, exactly like an audio ISR on real hardware. The
-window shows the 8×8 pad grid, a playhead bar and the compressor GR meter.
-Pads `row0col0` (play) and `row0col1` (bypass) respond to clicks.
+The board runs any `IProcessor` chain at a fixed hardware cadence
+(default 128-frame blocks @ 48 kHz): the UI pumps blocks to fill the
+audio device queue, exactly like an audio ISR on real hardware. The
+window shows the 8×8 pad grid, a playhead bar and the compressor GR
+meter (when the chain contains fet76). Pad rows: row 0 = play/bypass,
+row 7 = preset slots (slot 0 = default chain built from the CLI k=v
+parameters; slots 1-7 = `*.json` presets found on the SD), middle rows
+are free visual pads. `S` writes the current chain + parameters to the
+SD as `preset_NN.json` and selects it.
 
 Every render prints a report (frames, blocks, wall time, realtime factor).
 On a modern PC expect well over ×500 realtime for one compressor instance.

@@ -1,30 +1,39 @@
 // =====================================================================
 // deluge-sim / board_main.cpp — boardsim: simulador de placa (fase 2)
 //
-//   boardsim --sd CARPETA [--song N] [--hw-block N] [--list] [k=v ...]
-//       --sd        carpeta del host que hace de "tarjeta SD" (*.wav)
+//   boardsim --sd CARPETA [--song N] [--preset N] [--hw-block N] [--list]
+//            [k=v ...]
+//       --sd        carpeta del host que hace de "tarjeta SD" (*.wav y
+//                   *.json = presets de cadena)
 //       --song N    índice de canción inicial (default 0)
+//       --preset N  slot de preset inicial (0 = default fet76, 1..7 = SD)
 //       --hw-block  marcos por bloque hardware (default 128, rango [8,4096])
-//       --list      lista las canciones y sale (sin ventana)
+//       --list      lista canciones y presets y sale (sin ventana)
 //       k válidos (fet76): thresh_db ratio attack_s release_s
 //                          in_gain_db out_gain_db
 //
 //   Controles: ESPACIO play/stop | B bypass | ARRIBA/ABAJO canción |
+//              IZQ/DER slot de preset | S guarda preset en la SD |
 //              click en pads | ESC o cerrar ventana = salir
-//   Pads: fila 0 col 0 = PLAY/STOP, fila 0 col 1 = BYPASS, resto libres.
+//   Pads: fila 0 = PLAY/BYPASS, fila 7 = slots de preset (col 0 = default),
+//   resto libres.
 //
 // La ÚNICA pieza que toca SDL2 es este archivo: board_core es SDL-free
-// (testeable headless) y el cortafuegos suite_core queda intacto.
+// (testeable headless), el cortafuegos suite_core queda intacto y la
+// fábrica de fx (fx_factory.hpp) es la misma que usa simcli.
 // =====================================================================
 #define SDL_MAIN_HANDLED
 #include <SDL2/SDL.h>
 
-#include "adapter_fet76.hpp"
 #include "board_core.hpp"
+#include "deluge_sim/preset.hpp"
 #include "deluge_sim/wav_io.hpp"
+#include "fx_factory.hpp"
 
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
+#include <filesystem>
 #include <iostream>
 #include <map>
 #include <string>
@@ -48,12 +57,14 @@ constexpr int kQueueBlocks = 8;          // bloques hardware de cola (~21 ms)
 
 void print_usage() {
     std::cout <<
-        "deluge-sim boardsim v0.6 (simulador de placa)\n"
+        "deluge-sim boardsim v0.7 (simulador de placa)\n"
         "Uso:\n"
-        "  boardsim --sd CARPETA [--song N] [--hw-block N] [--list] [k=v ...]\n"
+        "  boardsim --sd CARPETA [--song N] [--preset N] [--hw-block N]"
+        " [--list] [k=v ...]\n"
         "    k: thresh_db ratio attack_s release_s in_gain_db out_gain_db\n"
         "Controles: ESPACIO play/stop | B bypass | ARRIBA/ABAJO canción | "
-        "click en pads | ESC salir\n";
+        "IZQ/DER preset | S guarda preset en la SD | click en pads | ESC salir\n"
+        "Pads: fila 0 = PLAY/BYPASS, fila 7 = slots de preset, resto libres\n";
 }
 
 bool parse_double(const std::string& s, double& out) {
@@ -91,6 +102,7 @@ void fill_rect(SDL_Renderer* r, int x, int y, int w, int h,
 int run_board(int argc, char** argv) {
     std::string sd_folder;
     long song_index = 0;
+    long preset_init = 0;
     double hw_block_d = double(board::kHardwareBlockFrames);
     bool list_only = false;
     std::map<std::string, double> kv;
@@ -104,6 +116,12 @@ int run_board(int argc, char** argv) {
                 return 2;
             }
         }
+        else if (a == "--preset" && i + 1 < argc) {
+            if (!parse_long(argv[++i], preset_init) || preset_init < 0) {
+                std::cerr << "ERROR: --preset debe ser un índice >= 0\n";
+                return 2;
+            }
+        }
         else if (a == "--hw-block" && i + 1 < argc) {
             if (!parse_double(argv[++i], hw_block_d) ||
                 hw_block_d < 8 || hw_block_d > 4096) {
@@ -114,12 +132,9 @@ int run_board(int argc, char** argv) {
         else if (a == "--list") { list_only = true; }
         else if (a.find('=') != std::string::npos) {
             std::string k = a.substr(0, a.find('=')), v = a.substr(a.find('=') + 1);
-            static const char* kValid[] = {"thresh_db", "ratio", "attack_s",
-                                           "release_s", "in_gain_db", "out_gain_db"};
-            bool known = false;
-            for (const char* vk : kValid) known = known || (k == vk);
             double d = 0.0;
-            if (!known || !parse_double(v, d)) {
+            // los k=v del board aplican a la cadena default (fet76)
+            if (!key_known(k, {"fet76"}) || !parse_double(v, d)) {
                 std::cerr << "ERROR: parámetro desconocido o inválido: '" << a << "'\n"
                           << "Válidos: thresh_db ratio attack_s release_s "
                              "in_gain_db out_gain_db\n";
@@ -147,27 +162,33 @@ int run_board(int argc, char** argv) {
         return 3;
     }
     std::cout << "SD montada: " << sd.folder() << " (" << sd.song_count()
-              << " canciones)\n";
+              << " canciones, " << sd.preset_count() << " presets)\n";
     for (size_t i = 0; i < sd.songs().size(); ++i)
         std::cout << "  [" << i << "] " << sd.songs()[i] << "\n";
+    for (size_t i = 0; i < sd.presets().size(); ++i)
+        std::cout << "  preset [" << i + 1 << "] " << sd.presets()[i] << "\n";
     if (list_only) return 0;
     if (size_t(song_index) >= sd.song_count()) song_index = 0;
 
-    // ---- reloj del board + cadena (mismo adaptador que simcli) ----
+    // ---- reloj del board + cadena default (misma fábrica que simcli) ----
     BoardClock clock;
     clock.hw_block = size_t(hw_block_d);
     BoardPump pump(clock);
 
-    suite_core::Fet76Ref::Params p;   // defaults; sobrescritos por los k=v
-    if (kv.count("thresh_db"))   p.thresh_db   = kv["thresh_db"];
-    if (kv.count("ratio"))       p.ratio       = kv["ratio"];
-    if (kv.count("attack_s"))    p.attack_s    = kv["attack_s"];
-    if (kv.count("release_s"))   p.release_s   = kv["release_s"];
-    if (kv.count("in_gain_db"))  p.in_gain_db  = kv["in_gain_db"];
-    if (kv.count("out_gain_db")) p.out_gain_db = kv["out_gain_db"];
-    auto adapter = std::make_unique<AdapterFet76>(p);
-    AdapterFet76* adapter_raw = adapter.get();
-    pump.add_processor(std::move(adapter));
+    // Estado de cadena/params efectivos (cambian con los slots de preset).
+    std::vector<std::string> cur_chain{"fet76"};
+    std::map<std::string, double> cur_kv = kv;      // k=v del CLI como base
+    AdapterFet76* gr_src = nullptr;                 // medidor GR si hay fet76
+    long preset_slot = 0;                           // 0 = default; 1..7 = SD
+    for (const std::string& fx : cur_chain) {
+        auto p = make_fx(fx, effective_fx_params(cur_kv, fx));
+        if (!p) {
+            std::cerr << "ERROR: fx desconocido: '" << fx << "'\n";
+            return 2;
+        }
+        if (fx == "fet76") gr_src = dynamic_cast<AdapterFet76*>(p.get());
+        pump.add_processor(std::move(p));
+    }
 
     // ---- carga de la canción seleccionada (debe seguir viva: es local) ----
     WavData song;
@@ -213,7 +234,7 @@ int run_board(int argc, char** argv) {
         return 3;
     }
 
-    SDL_Window* win = SDL_CreateWindow("deluge-sim board v0.6",
+    SDL_Window* win = SDL_CreateWindow("deluge-sim board v0.7",
                                        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                        kWindowW, kWindowH, 0);
     SDL_Renderer* ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
@@ -226,6 +247,48 @@ int run_board(int argc, char** argv) {
         return 3;
     }
     SDL_PauseAudioDevice(dev, 0);                   // el dispositivo corre ya
+
+    // ---- slots de preset: 0 = default (fet76 + k=v CLI), 1..7 = SD ----
+    long max_slot = std::min<long>(7, long(sd.preset_count()));
+    auto apply_slot = [&](long slot) -> bool {
+        pump.stop();
+        SDL_ClearQueuedAudio(dev);
+        pump.clear_processors();
+        gr_src = nullptr;
+        if (slot <= 0) {
+            cur_chain.assign(1, "fet76");
+            cur_kv = kv;                            // k=v del CLI como base
+        } else {
+            const size_t idx = size_t(slot - 1);
+            if (idx >= sd.preset_count()) return false;
+            ChainPreset pr;
+            if (!load_preset(sd.presets()[idx], pr, err)) {
+                std::cerr << "ERROR: " << err << "\n";
+                return false;
+            }
+            cur_chain = pr.chain;
+            cur_kv.clear();
+            for (const auto& [fx, kvv] : pr.params)
+                for (const auto& [k, v] : kvv)
+                    cur_kv[fx + "." + k] = v;
+        }
+        for (const std::string& fx : cur_chain) {
+            auto p = make_fx(fx, effective_fx_params(cur_kv, fx));
+            if (!p) {
+                std::cerr << "ERROR: fx desconocido en preset: '" << fx << "'\n";
+                return false;
+            }
+            if (fx == "fet76") gr_src = dynamic_cast<AdapterFet76*>(p.get());
+            pump.add_processor(std::move(p));
+        }
+        if (!load_song_index(song_index)) return false;
+        preset_slot = slot;
+        std::cout << "PRESET SLOT " << slot << ":";
+        for (const auto& fx : cur_chain) std::cout << " " << fx;
+        std::cout << "\n";
+        return true;
+    };
+    if (preset_init > 0) apply_slot(std::min<long>(preset_init, max_slot));
 
     const int grid_w = kPadCols * kCellPx + (kPadCols - 1) * kGapPx;
     const int x0 = (kWindowW - grid_w) / 2;
@@ -279,6 +342,43 @@ int run_board(int argc, char** argv) {
                         }
                         break;
                     }
+                    case SDLK_LEFT:
+                    case SDLK_RIGHT: {
+                        long dir = (e.key.keysym.sym == SDLK_RIGHT) ? 1 : -1;
+                        apply_slot((preset_slot + dir + (max_slot + 1)) % (max_slot + 1));
+                        break;
+                    }
+                    case SDLK_s: {                  // guarda preset en la SD
+                        ChainPreset pr;
+                        pr.version = 1;
+                        pr.chain = cur_chain;
+                        for (const std::string& fx : cur_chain)
+                            pr.params[fx] = effective_fx_params(cur_kv, fx);
+                        std::string name;
+                        for (int nn = 1; nn < 100; ++nn) {
+                            char buf[32];
+                            std::snprintf(buf, sizeof buf, "preset_%02d.json", nn);
+                            const std::string cand =
+                                (std::filesystem::path(sd.folder()) / buf).string();
+                            if (!std::filesystem::exists(cand)) { name = cand; break; }
+                        }
+                        if (name.empty()) {
+                            std::cout << "SD: sin hueco para más presets\n";
+                            break;
+                        }
+                        if (!save_preset(name, pr, err)) {
+                            std::cerr << "ERROR: " << err << "\n";
+                            break;
+                        }
+                        sd.mount(sd.folder(), err);   // re-escanea la SD
+                        max_slot = std::min<long>(7, long(sd.preset_count()));
+                        long newslot = 0;
+                        for (size_t i = 0; i < sd.preset_count(); ++i)
+                            if (sd.presets()[i] == name) { newslot = long(i + 1); break; }
+                        apply_slot(newslot);
+                        std::cout << "PRESET GUARDADO: " << name << "\n";
+                        break;
+                    }
                     default: break;
                 }
             }
@@ -305,6 +405,8 @@ int run_board(int argc, char** argv) {
                         pump.set_bypass(!pump.bypassed());
                         pads.set_bypassed(pump.bypassed());
                         std::cout << (pump.bypassed() ? "BYPASS ON\n" : "BYPASS OFF\n");
+                    } else if (row == kPadRows - 1) {    // fila 7: slots de preset
+                        if (col <= max_slot) apply_slot(col);
                     } else {
                         pads.toggle(row, col);           // pads libres
                     }
@@ -346,6 +448,9 @@ int run_board(int argc, char** argv) {
                 } else if (r == 0 && c == 1) {           // BYPASS
                     if (pads.is_lit(r, c)) { cr = 240; cg = 180; cb = 60; }
                     else { cr = 80; cg = 62; cb = 30; }
+                } else if (r == kPadRows - 1) {          // slots de preset
+                    if (c == preset_slot) { cr = 210; cg = 120; cb = 255; }
+                    else if (c <= max_slot) { cr = 58; cg = 42; cb = 74; }
                 } else if (pads.is_lit(r, c)) {
                     cr = 0; cg = 200; cb = 255;
                 }
@@ -358,15 +463,17 @@ int run_board(int argc, char** argv) {
         fill_rect(ren, x0, kWindowH - 56, grid_w, 10, 60, 64, 72);
         fill_rect(ren, x0, kWindowH - 56,
                   int(grid_w * (frac > 1.0 ? 1.0 : frac)), 10, 120, 200, 255);
-        // Medidor de GR del fet76 (0 dB arriba, -24 dB abajo) a la derecha.
-        const double gr = adapter_raw->gr_db();          // [0, -24]
-        const double grf = (0.0 - gr) / 24.0;            // 0=sin GR, 1=GR máx
-        fill_rect(ren, x0 + grid_w + 12, y0, 14, kPadRows * kCellPx + 7 * kGapPx,
-                  60, 64, 72);
-        fill_rect(ren, x0 + grid_w + 12, y0,
-                  14, int((kPadRows * kCellPx + 7 * kGapPx) *
-                          (grf < 0.0 ? 0.0 : (grf > 1.0 ? 1.0 : grf))),
-                  220, 90, 90);
+        // Medidor de GR del fet76 (0 dB arriba, -24 dB abajo) a la derecha;
+        // si la cadena no tiene fet76, el carril queda apagado.
+        const int mx = x0 + grid_w + 12;
+        const int mh = kPadRows * kCellPx + 7 * kGapPx;
+        fill_rect(ren, mx, y0, 14, mh, 60, 64, 72);
+        if (gr_src) {
+            const double gr = gr_src->gr_db();           // [0, -24]
+            const double grf = (0.0 - gr) / 24.0;        // 0=sin GR, 1=GR máx
+            const double gf = (grf < 0.0) ? 0.0 : (grf > 1.0 ? 1.0 : grf);
+            fill_rect(ren, mx, y0, 14, int(double(mh) * gf), 220, 90, 90);
+        }
         SDL_RenderPresent(ren);
         SDL_Delay(5);                                    // ~200 fps de UI, sobra
     }

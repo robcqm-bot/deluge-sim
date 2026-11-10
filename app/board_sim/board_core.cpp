@@ -21,13 +21,16 @@ bool SdCard::mount(const std::string& folder, std::string& err) {
         return false;
     }
     songs_.clear();
+    presets_.clear();
     for (const auto& e : std::filesystem::directory_iterator(folder, ec)) {
         if (!e.is_regular_file()) continue;
         std::string ext = e.path().extension().string();
         for (char& c : ext) c = char(std::tolower(static_cast<unsigned char>(c)));
         if (ext == ".wav") songs_.push_back(e.path().string());
+        else if (ext == ".json") presets_.push_back(e.path().string());
     }
     std::sort(songs_.begin(), songs_.end());
+    std::sort(presets_.begin(), presets_.end());
     if (songs_.empty()) {
         err = "la carpeta SD no contiene ningún .wav: '" + folder + "'";
         return false;

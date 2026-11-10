@@ -22,6 +22,7 @@
       dependencias; `simcli preset --save/--load` y `render --preset`)
 - [x] GitHub Actions CI matrix (Windows MSVC + Ubuntu gcc + MinGW)
       ✅ v0.6 (job windows-mingw con MSYS2 UCRT64)
-- [ ] English pass over code comments (currently partial Spanish)
-- [ ] Board: persistencia de clips/presets en la SD y navegador de
-      canciones en la ventana
+- [ ] English pass over code comments (único ítem de infra pendiente)
+- [x] Board: persistencia de presets en la SD y slots en la ventana
+      ✅ v0.7 (fila 7 de pads + IZQ/DER + S guarda `preset_NN.json`;
+      fábrica de fx compartida `fx_factory.hpp`)

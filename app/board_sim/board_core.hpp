@@ -22,26 +22,30 @@ namespace deluge_sim {
 namespace board {
 
 // ------------------------------ SdCard -------------------------------
-// v0.2: la tarjeta SD es una carpeta del host; las canciones son los
-// *.wav directamente legibles en ella (sin formato de banco todavía).
+// v0.7: la tarjeta SD es una carpeta del host; las canciones son los
+// *.wav y los presets de cadena son los *.json (formato ChainPreset)
+// directamente legibles en ella.
 class SdCard {
 public:
-    // Escanea *.wav (extensión insensible a mayúsculas) en 'folder',
-    // ordenado alfabéticamente por ruta. No abre los WAV (eso ocurre al
-    // seleccionar canción). false con 'err' accionable si la carpeta no
-    // existe o no contiene ningún wav.
+    // Escanea *.wav y *.json (extensión insensible a mayúsculas) en
+    // 'folder', cada lista ordenada alfabéticamente por ruta. No abre
+    // los archivos (eso ocurre al seleccionar). false con 'err'
+    // accionable si la carpeta no existe.
     bool mount(const std::string& folder, std::string& err);
-    void unmount() { mounted_ = false; songs_.clear(); folder_.clear(); }
+    void unmount() { mounted_ = false; songs_.clear(); presets_.clear(); folder_.clear(); }
 
     bool mounted() const { return mounted_; }
     const std::string& folder() const { return folder_; }
     size_t song_count() const { return songs_.size(); }
-    const std::vector<std::string>& songs() const { return songs_; }  // rutas completas
+    size_t preset_count() const { return presets_.size(); }
+    const std::vector<std::string>& songs() const { return songs_; }      // rutas .wav
+    const std::vector<std::string>& presets() const { return presets_; }  // rutas .json
 
 private:
     bool mounted_ = false;
     std::string folder_;
     std::vector<std::string> songs_;
+    std::vector<std::string> presets_;
 };
 
 // ------------------------------ PadGrid ------------------------------
@@ -80,9 +84,11 @@ public:
     explicit BoardPump(const BoardClock& clock = BoardClock());
 
     // La cadena se procesa en orden de inserción. El bypass la salta sin
-    // desmontarla (set_bypass).
+    // desmontarla (set_bypass). clear_processors permite reconstruir la
+    // cadena (p. ej. al cambiar de preset) sin tirar el pump.
     void add_processor(ProcessorPtr p);
     size_t processor_count() const { return chain_.size(); }
+    void clear_processors() { chain_.clear(); }
     void set_bypass(bool on) { bypass_ = on; }
     bool bypassed() const { return bypass_; }
 

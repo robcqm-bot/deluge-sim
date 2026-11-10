@@ -7,12 +7,14 @@
 #include "deluge_sim/preset.hpp"
 #include "deluge_sim/stream_source.hpp"
 #include "deluge_sim/wav_io.hpp"
+#include "fx_factory.hpp"
 #include "suite_core/fet76_ref.hpp"
 #include "suite_core/opto_comp.hpp"
 #include "suite_core/passive_eq.hpp"
 #include "suite_core/plate_reverb.hpp"
 #include "suite_core/tape_sat.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -1139,11 +1141,12 @@ void test_engine_chain_plate() {
 #include "test_tape.inc"
 #include "test_stream.inc"
 #include "test_preset.inc"
+#include "test_board_preset.inc"
 
 } // namespace
 
 int main() {
-    std::cout << "deluge-sim :: simtests v0.6\n";
+    std::cout << "deluge-sim :: simtests v0.7\n";
     test_wav_roundtrip();
     test_fet76_no_gr();
     test_fet76_gr_steady();
@@ -1193,6 +1196,9 @@ int main() {
     test_preset_bad_types();
     test_preset_empty();
     test_preset_disk_errors();
+    test_sdcard_presets();
+    test_fx_factory();
+    test_preset_chain_in_pump();
     if (g_failures == 0) {
         std::cout << "RESULTADO: TODO OK\n";
         return 0;

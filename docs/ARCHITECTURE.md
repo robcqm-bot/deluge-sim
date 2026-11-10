@@ -1,4 +1,4 @@
-# ARCHITECTURE.md — deluge-sim v0.6
+# ARCHITECTURE.md — deluge-sim v0.7
 
 > (Documento de arquitectura en español — traducciones al inglés bienvenidas.)
 
@@ -59,6 +59,7 @@ deluge-sim\
 │   ├── adapter_eq.hpp                    # adaptador EQ pasivo (v0.4)
 │   ├── adapter_plate.hpp                 # adaptador reverb (v0.5)
 │   ├── adapter_tape.hpp                  # adaptador cinta (v0.6)
+│   ├── fx_factory.hpp                    # registro de fx compartido (v0.7)
 │   ├── main.cpp                          # simcli (--chain, --preset, preset)
 │   └── board_sim\                        # <<< fase 2 (v0.2)
 │       ├── board_clock.hpp               # stubs de reloj (48 kHz, bloque 128)
@@ -66,9 +67,10 @@ deluge-sim\
 │       └── board_main.cpp                # boardsim: ÚNICO archivo que enlaza SDL2
 └── tests\
     ├── test_all.cpp                      # simtests: main + helpers + pruebas propias
-    └── test_{tape,stream,preset}.inc     # módulos incluidos dentro del namespace
-                                           # (contrato: sin #include/main, usan check())
-                                           # — 49 casos de aceptación en total
+    └── test_{tape,stream,preset,board_preset}.inc  # módulos incluidos dentro
+                                           # del namespace (contrato: sin
+                                           # #include/main, usan check())
+                                           # — 52 casos de aceptación en total
 ```
 
 ## 3. Data Flow
@@ -147,7 +149,7 @@ en cada corrida — es el indicador de regresión de rendimiento del proyecto.
 - Preferido: `cmake -B build -A x64 && cmake --build build --config Release`
   → `build\Release\simtests.exe` + `simcli.exe`
 - Alternativa (MinGW/g++): `./build.sh run`
-- Puerta de aceptación: `simtests` exit 0 (49 casos con expectativa matemática)
+- Puerta de aceptación: `simtests` exit 0 (52 casos con expectativa matemática)
 - **board_sim (opcional)**: pasa `-DSDL2_SDK_DIR=<SDK>/x86_64-w64-mingw32`
   (SDK oficial MinGW de libsdl-org; la DLL se copia junto al exe) o instala
   `libsdl2-dev` (Linux, find_package). Sin SDL2 el target se omite con un
@@ -197,6 +199,14 @@ SD (carpeta host) ──read_wav──► WavData (viva mientras la canción car
    headless y matemáticas.
 4. **Sample rate incompatible = rechazo accionable** (el resample es fase
    futura, documentada en TODO).
+5. **Presets en la SD (v0.7)**: `SdCard` escanea `*.json` junto a los
+   `*.wav`; la fila 7 del grid son slots de preset (col 0 = default con
+   los k=v del CLI; 1-7 = presets de la SD), IZQ/DER cicla y `S` guarda
+   la cadena+params vigentes como `preset_NN.json` en la SD. Al cambiar
+   de slot el pump se reconstruye con `clear_processors()` + la FÁBRICA
+   COMPARTIDA `fx_factory.hpp` (misma fuente de claves/defaults que
+   simcli — CLI y board no pueden divergir). El medidor GR solo se
+   dibuja si la cadena contiene fet76.
 
 ## 8. Procesadores de referencia (suite_core)
 
