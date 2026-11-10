@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # =====================================================================
-# deluge-sim / build.sh — build directo con g++ (sin CMake)
-# Uso:   ./build.sh           -> compila simcli.exe y simtests.exe en build/
-#        ./build.sh run       -> además ejecuta los tests
+# deluge-sim / build.sh — direct build with g++ (no CMake)
+# Usage: ./build.sh           -> builds simcli.exe and simtests.exe into build/
+#        ./build.sh run       -> also runs the tests
 # =====================================================================
 set -euo pipefail
 cd "$(dirname "$0")"

@@ -1,7 +1,7 @@
 // =====================================================================
-// deluge-sim / preset.cpp — Parser/escritor JSON mínimo para presets
-// Descendente recursivo, sin dependencias externas y sin excepciones
-// hacia fuera: toda la comunicación de errores es bool + err.
+// deluge-sim / preset.cpp — Minimal JSON parser/writer for presets
+// Recursive descent, no external dependencies, no exceptions thrown
+// outward: all error communication is bool + err.
 // =====================================================================
 #include "deluge_sim/preset.hpp"
 
@@ -17,10 +17,10 @@
 namespace deluge_sim {
 namespace {
 
-// ------------------------------ escritura ------------------------------
+// ------------------------------- writing -------------------------------
 
-// Escapa un string para JSON: comillas, barra invertida y caracteres de
-// control básicos. Los bytes UTF-8 (>= 0x80) pasan intactos.
+// Escapes a string for JSON: quotes, backslash and basic control
+// characters. UTF-8 bytes (>= 0x80) pass through intact.
 void json_escape(const std::string& s, std::string& out) {
     for (char ch : s) {
         const unsigned char c = (unsigned char)ch;
@@ -44,19 +44,19 @@ void json_escape(const std::string& s, std::string& out) {
     }
 }
 
-// %.17g garantiza el roundtrip bit-exacto de cualquier double finito.
+// %.17g guarantees a bit-exact roundtrip of any finite double.
 std::string fmt_double(double v) {
     char buf[40];
     std::snprintf(buf, sizeof(buf), "%.17g", v);
     std::string s(buf);
-    // Guardia de locale: si el entorno activó un locale con coma decimal,
-    // el separador debe seguir siendo '.' para que el JSON sea válido.
+    // Locale guard: if the environment enabled a locale with a decimal
+    // comma, the separator must remain '.' so the JSON stays valid.
     for (char& c : s) if (c == ',') c = '.';
     return s;
 }
 
-// Serializa el preset con sangría de 2 espacios (arrays de 'chain' en
-// línea, objetos de 'params' expandidos).
+// Serializes the preset with 2-space indentation ('chain' arrays on
+// one line, 'params' objects expanded).
 void build_json(const ChainPreset& p, std::string& out) {
     out.clear();
     out += "{\n";
@@ -104,10 +104,10 @@ void build_json(const ChainPreset& p, std::string& out) {
 
 // ------------------------------ parser ------------------------------
 
-// Cota de anidado para que un archivo hostil no agote la pila.
+// Nesting cap so a hostile file cannot exhaust the stack.
 constexpr int kMaxDepth = 200;
 
-// Cursor de lectura: posición, línea actual y primer error registrado.
+// Read cursor: position, current line and first recorded error.
 struct JsonCursor {
     const std::string& text;
     size_t pos = 0;
@@ -116,19 +116,19 @@ struct JsonCursor {
 
     explicit JsonCursor(const std::string& t) : text(t) {}
 
-    // Registra el primer error con número de línea accionable.
+    // Records the first error with an actionable line number.
     bool fail(const std::string& msg) {
         if (err.empty()) err = "línea " + std::to_string(line) + ": " + msg;
         return false;
     }
     bool eof() const { return pos >= text.size(); }
     char peek() const { return eof() ? '\0' : text[pos]; }
-    // Avanza un carácter contando saltos de línea.
+    // Advances one character, counting newlines.
     void bump() {
         if (text[pos] == '\n') ++line;
         ++pos;
     }
-    // Whitespace JSON: espacio, tabulador, CR y LF.
+    // JSON whitespace: space, tab, CR and LF.
     void skip_ws() {
         while (!eof()) {
             const char c = text[pos];
@@ -136,7 +136,7 @@ struct JsonCursor {
             else break;
         }
     }
-    // Describe el token de la posición actual, para errores accionables.
+    // Describes the token at the current position, for actionable errors.
     std::string describe_at() const {
         if (eof()) return "fin del archivo";
         const char c = peek();
@@ -158,7 +158,7 @@ struct JsonCursor {
         return fail(std::string("se esperaba '") + c + "' (encontrado " +
                     describe_at() + ")");
     }
-    // Consume un literal exacto ('true', 'false', 'null') ya despachado.
+    // Consumes an exact literal ('true', 'false', 'null') already dispatched.
     bool parse_literal(const char* lit) {
         for (const char* p = lit; *p != '\0'; ++p) {
             if (eof() || text[pos] != *p)
@@ -168,14 +168,14 @@ struct JsonCursor {
         }
         return true;
     }
-    // true/false/null donde se espera un campo: aceptados e ignorados.
+    // true/false/null where a field is expected: accepted and ignored.
     bool skip_literal_any() {
         const char c = peek();
         if (c == 't') return parse_literal("true");
         if (c == 'f') return parse_literal("false");
         return parse_literal("null");
     }
-    // Cadena JSON con escapes (incluido \uXXXX con pares surrogate).
+    // JSON string with escapes (including \uXXXX with surrogate pairs).
     bool parse_string(std::string& out, const char* context) {
         skip_ws();
         if (peek() != '"')
@@ -193,7 +193,7 @@ struct JsonCursor {
                 return fail("carácter de control sin escapar dentro de cadena");
             }
             if (c != '\\') { out += c; bump(); continue; }
-            bump();                                     // consume '\'
+            bump();                                     // consumes '\'
             if (eof()) return fail("cadena sin cerrar (escape al final)");
             const char e = text[pos];
             switch (e) {
@@ -215,7 +215,7 @@ struct JsonCursor {
             }
         }
     }
-    // Lee 4 dígitos hexadecimales de un escape \u.
+    // Reads 4 hexadecimal digits of a \u escape.
     bool hex4(unsigned& cp) {
         if (pos + 4 > text.size())
             return fail("escape \\u incompleto (se esperaban 4 dígitos hexadecimales)");
@@ -230,15 +230,15 @@ struct JsonCursor {
                                          "dígito hexadecimal, encontrado '") + h + "')");
             cp = cp * 16u + d;
         }
-        pos += 4;                                       // dígitos hex: nunca '\n'
+        pos += 4;                                       // hex digits: never '\n'
         return true;
     }
     bool parse_unicode_escape(std::string& out) {
         unsigned cp;
         if (!hex4(cp)) return false;
-        if (cp >= 0xD800u && cp <= 0xDBFFu) {           // surrogate alto: pareja
+        if (cp >= 0xD800u && cp <= 0xDBFFu) {           // high surrogate: pair
             if (pos + 2 <= text.size() && text[pos] == '\\' && text[pos + 1] == 'u') {
-                pos += 2;                               // '\\u': nunca '\n'
+                pos += 2;                               // '\\u': never '\n'
                 unsigned lo;
                 if (!hex4(lo)) return false;
                 if (lo < 0xDC00u || lo > 0xDFFFu)
@@ -250,7 +250,7 @@ struct JsonCursor {
         } else if (cp >= 0xDC00u && cp <= 0xDFFFu) {
             return fail("surrogate bajo aislado");
         }
-        // Codifica el punto de código como UTF-8.
+        // Encodes the code point as UTF-8.
         if (cp < 0x80u) {
             out += char(cp);
         } else if (cp < 0x800u) {
@@ -268,8 +268,8 @@ struct JsonCursor {
         }
         return true;
     }
-    // Número JSON estricto: [signo] int [frac] [exp]. Sin NaN/Inf ni
-    // ceros a la izquierda; la conversión es strtod del token validado.
+    // Strict JSON number: [sign] int [frac] [exp]. No NaN/Inf and no
+    // leading zeros; conversion is strtod on the validated token.
     bool parse_number(double& out) {
         skip_ws();
         const size_t inicio = pos;
@@ -286,7 +286,7 @@ struct JsonCursor {
         if (tok[i] == '-') ++i;
         if (i >= tok.size() || tok[i] < '0' || tok[i] > '9')
             return fail("número inválido ('" + tok + "')");
-        if (tok[i] == '0') {                            // '0' no seguido de dígitos
+        if (tok[i] == '0') {                            // '0' not followed by digits
             ++i;
             if (i < tok.size() && tok[i] >= '0' && tok[i] <= '9')
                 return fail("número inválido (cero a la izquierda: '" + tok + "')");
@@ -316,7 +316,7 @@ struct JsonCursor {
         out = v;
         return true;
     }
-    // Salta cualquier valor JSON (claves desconocidas: forward-compat).
+    // Skips any JSON value (unknown keys: forward-compat).
     bool skip_value(int depth) {
         if (depth > kMaxDepth)
             return fail("JSON anidado demasiado profundo (>" +
@@ -368,7 +368,7 @@ struct JsonCursor {
     }
 };
 
-// "version": número entero; true/false/null => ignorado (queda el 1).
+// "version": integer number; true/false/null => ignored (stays 1).
 bool parse_version_field(JsonCursor& j, int& version) {
     j.skip_ws();
     const char c = j.peek();
@@ -385,8 +385,8 @@ bool parse_version_field(JsonCursor& j, int& version) {
     return true;
 }
 
-// "chain": array de strings; true/false/null => ignorado. Los elementos
-// son ESTRICTOS: cualquier cosa que no sea string => error claro.
+// "chain": array of strings; true/false/null => ignored. Elements
+// are STRICT: anything that is not a string => clear error.
 bool parse_chain_field(JsonCursor& j, std::vector<std::string>& chain) {
     j.skip_ws();
     const char c = j.peek();
@@ -420,8 +420,8 @@ bool parse_chain_field(JsonCursor& j, std::vector<std::string>& chain) {
     }
 }
 
-// "params": { fx: { parámetro: número } }. true/false/null como valor
-// del campo => ignorado. Los valores hoja son ESTRICTOS: solo números.
+// "params": { fx: { parameter: number } }. true/false/null as the
+// field's value => ignored. Leaf values are STRICT: numbers only.
 bool parse_params_field(JsonCursor& j,
                         std::map<std::string, std::map<std::string, double>>& params) {
     j.skip_ws();
@@ -450,7 +450,7 @@ bool parse_params_field(JsonCursor& j,
         j.skip_ws();
         if (j.peek() == '}') {
             j.bump();
-            params[fx] = {};                            // fx sin parámetros
+            params[fx] = {};                            // fx with no parameters
         } else {
             for (;;) {
                 std::string key;
@@ -483,7 +483,7 @@ bool parse_params_field(JsonCursor& j,
                               "' (encontrado " + j.describe_at() + ")");
             }
         }
-        // Siguiente entrada de fx.
+        // Next fx entry.
         j.skip_ws();
         if (j.peek() == ',') {
             j.bump(); j.skip_ws();
@@ -497,10 +497,10 @@ bool parse_params_field(JsonCursor& j,
     }
 }
 
-// Raíz: objeto con "version", "chain", "params" y claves desconocidas,
-// que se saltan silenciosamente (forward-compat documentado).
+// Root: object with "version", "chain", "params" and unknown keys,
+// which are silently skipped (documented forward-compat).
 bool parse_root(JsonCursor& j, ChainPreset& out) {
-    // BOM UTF-8 opcional (los editores de Windows lo añaden): se salta.
+    // Optional UTF-8 BOM (added by Windows editors): skipped.
     if (j.text.size() >= 3 && (unsigned char)j.text[0] == 0xEF &&
         (unsigned char)j.text[1] == 0xBB && (unsigned char)j.text[2] == 0xBF) {
         j.pos = 3;
@@ -513,7 +513,7 @@ bool parse_root(JsonCursor& j, ChainPreset& out) {
     j.bump();
     j.skip_ws();
     if (j.peek() == '}') {
-        j.bump();                                       // preset vacío {}
+        j.bump();                                       // empty preset {}
     } else {
         for (;;) {
             std::string key;
@@ -526,7 +526,7 @@ bool parse_root(JsonCursor& j, ChainPreset& out) {
             } else if (key == "params") {
                 if (!parse_params_field(j, out.params)) return false;
             } else {
-                if (!j.skip_value(1)) return false;     // desconocida: se salta
+                if (!j.skip_value(1)) return false;     // unknown: skipped
             }
             j.skip_ws();
             if (j.peek() == ',') {
@@ -551,7 +551,7 @@ bool parse_root(JsonCursor& j, ChainPreset& out) {
 
 bool save_preset(const std::string& path, const ChainPreset& p, std::string& err) {
     try {
-        // El JSON no representa NaN/Inf: se rechazan antes de escribir nada.
+        // JSON cannot represent NaN/Inf: they are rejected before writing anything.
         for (const auto& fx : p.params) {
             for (const auto& kv : fx.second) {
                 if (!std::isfinite(kv.second)) {
@@ -584,7 +584,7 @@ bool load_preset(const std::string& path, ChainPreset& out, std::string& err) {
         const std::string text((std::istreambuf_iterator<char>(f)),
                                std::istreambuf_iterator<char>());
         if (f.bad()) { err = "error de lectura: " + path; return false; }
-        ChainPreset tmp;                    // 'out' solo cambia si todo va bien
+        ChainPreset tmp;                    // 'out' only changes if all goes well
         JsonCursor j(text);
         if (!parse_root(j, tmp)) { err = j.err; return false; }
         out = std::move(tmp);

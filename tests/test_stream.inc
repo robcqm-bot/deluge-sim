@@ -1,18 +1,19 @@
 // =====================================================================
-// test_stream.inc — pruebas de StreamWavSource (fuente WAV en streaming)
-// CONTRATO: se incluye VERBATIM dentro del namespace anónimo de
-// tests/test_all.cpp DESPUÉS de check() y make_sine(). Por tanto: sin
-// #include, sin main(), sin check propio; solo funciones test_stream_*
-// y helpers internos (prefijo ts_ para evitar colisiones).
-// Include que el integrador debe añadir a test_all.cpp:
+// test_stream.inc — StreamWavSource tests (streaming WAV source)
+// CONTRACT: included VERBATIM inside the anonymous namespace of
+// tests/test_all.cpp AFTER check() and make_sine(). Therefore: no
+// #include, no main(), no check of its own; only test_stream_*
+// functions and internal helpers (ts_ prefix to avoid collisions).
+// Include the integrator must add to test_all.cpp:
 //     #include "deluge_sim/stream_source.hpp"
-// (los <std> usados ya están: cmath cstdint filesystem fstream iostream
-//  limits string system_error vector; make_unique llega vía core.hpp).
+// (the <std> headers used are already there: cmath cstdint filesystem
+//  fstream iostream limits string system_error vector; make_unique
+//  arrives via core.hpp).
 // =====================================================================
 
 // --------------------------- helpers ts_ -----------------------------
 
-// Escrituras little-endian para fabricar WAVs a mano (solo en tests).
+// Little-endian writers to hand-craft WAVs (tests only).
 void ts_put_u16(std::vector<uint8_t>& b, uint16_t v) {
     b.push_back(uint8_t(v));
     b.push_back(uint8_t(v >> 8));
@@ -24,15 +25,15 @@ void ts_put_u32(std::vector<uint8_t>& b, uint32_t v) {
     b.push_back(uint8_t(v >> 24));
 }
 
-// Punta de float<->bits para serializar float32 sin <cstring> (C++17):
-// la unión preserva el patrón de bits exacto de cada muestra.
+// float<->bits pun to serialize float32 without <cstring> (C++17):
+// the union preserves the exact bit pattern of each sample.
 union TsFloatBits {
     float f;
     uint32_t u;
 };
 
-// Buffers planares reutilizables (Block no posee memoria; los vectores
-// se reservan una vez y los punteros de b quedan fijos).
+// Reusable planar buffers (Block does not own memory; the vectors
+// are reserved once and b's pointers stay fixed).
 struct TsPlanar {
     std::vector<float> L, R;
     deluge_sim::Block b;
@@ -42,7 +43,7 @@ struct TsPlanar {
     }
 };
 
-// Consume 'src' en bloques de 'cap' y devuelve el tamaño de cada bloque.
+// Drains 'src' in blocks of 'cap' and returns each block's size.
 std::vector<size_t> ts_drain(deluge_sim::IAudioSource& src, TsPlanar& bufs,
                              size_t cap, std::vector<float>* outL = nullptr,
                              std::vector<float>* outR = nullptr) {
@@ -60,9 +61,9 @@ std::vector<size_t> ts_drain(deluge_sim::IAudioSource& src, TsPlanar& bufs,
     return sizes;
 }
 
-// ------------------------------ pruebas ------------------------------
+// ------------------------------ tests --------------------------------
 
-// a) RAM (read_wav) vs streaming (bloques de 512): bit-iguales.
+// a) RAM (read_wav) vs streaming (512-frame blocks): bit-equal.
 void test_stream_equals_ram() {
     std::cout << "[test] stream: igualdad bit-exacta RAM vs streaming (PCM16 3 s)\n";
     const std::string tmp = (std::filesystem::temp_directory_path() /
@@ -96,9 +97,9 @@ void test_stream_equals_ram() {
     check(exact, "TODAS las muestras L/R bit-iguales RAM vs streaming (==)");
 }
 
-// b) Bloque parcial final y fin de stream: misma secuencia que
-//    FileAudioSource. Con max 512: 1500 marcos => 512, 512, 476, false
-//    (secuencia del enunciado); 1000 marcos => 512, 488, false.
+// b) Partial final block and end of stream: same sequence as
+//    FileAudioSource. With max 512: 1500 frames => 512, 512, 476, false
+//    (sequence from the spec); 1000 frames => 512, 488, false.
 void test_stream_partial_tail() {
     std::cout << "[test] stream: cola parcial 512+512+476 y fin de stream\n";
     const std::string tmp = (std::filesystem::temp_directory_path() /
@@ -114,12 +115,12 @@ void test_stream_partial_tail() {
               sizes[2] == 476,
           "secuencia streaming exacta: 512, 512, 476");
     check(!src.read(bufs.b, 512), "lectura tras agotar -> false");
-    // Misma secuencia que FileAudioSource sobre los mismos datos.
+    // Same sequence as FileAudioSource over the same data.
     deluge_sim::FileAudioSource fsrc(w);
     const std::vector<size_t> fsizes = ts_drain(fsrc, bufs, 512);
     check(fsizes == sizes, "FileAudioSource da la MISMA secuencia de bloques");
-    // Caso de 1000 marcos (el enunciado mezclaba 1000 con 512/512/476;
-    // 512+512+476 = 1500, así que se cubren ambos): 512, 488, false.
+    // 1000-frame case (the spec mixed 1000 with 512/512/476;
+    // 512+512+476 = 1500, so both are covered): 512, 488, false.
     const std::string tmp2 = (std::filesystem::temp_directory_path() /
                               "deluge_sim_test_stream_tail2.wav").string();
     WavData w2 = make_sine(48000, 1000, 0.5);
@@ -131,7 +132,7 @@ void test_stream_partial_tail() {
           "1000 marcos: 512, 488, luego false");
 }
 
-// c) Mono: L == R == canal original, bit-exacto contra read_wav.
+// c) Mono: L == R == original channel, bit-exact against read_wav.
 void test_stream_mono_fold() {
     std::cout << "[test] stream: mono se pliega a estéreo bit-exacto (2 s)\n";
     const std::string tmp = (std::filesystem::temp_directory_path() /
@@ -165,8 +166,8 @@ void test_stream_mono_fold() {
     check(exact, "L == R == canal original bit-exacto contra read_wav (==)");
 }
 
-// d) WAV float32 fabricado a mano (RIFF de 44 bytes, format tag 3):
-//    decodificación bit-exacta de los floats generados.
+// d) Hand-crafted float32 WAV (44-byte RIFF, format tag 3):
+//    bit-exact decoding of the generated floats.
 void test_stream_float32() {
     std::cout << "[test] stream: WAV float32 fabricado a mano, bit-exacto\n";
     const std::string tmp = (std::filesystem::temp_directory_path() /
@@ -174,14 +175,14 @@ void test_stream_float32() {
     const uint32_t sr = 48000;
     const size_t frames = 4800;
     std::string err;
-    std::vector<float> gen(frames * 2);                     // estéreo intercalado
+    std::vector<float> gen(frames * 2);                     // interleaved stereo
     for (size_t i = 0; i < frames; ++i) {
         const float v = float(0.5 * std::sin(2.0 * 3.14159265358979323846 *
                                              1000.0 * double(i) / double(sr)));
         gen[2 * i] = v;
         gen[2 * i + 1] = v;
     }
-    // Cabecera estándar de 44 bytes: format tag 3 (IEEE float), 32 bits.
+    // Standard 44-byte header: format tag 3 (IEEE float), 32 bits.
     const uint32_t data_bytes = uint32_t(frames) * 2 * 4;
     std::vector<uint8_t> f;
     f.reserve(44 + size_t(data_bytes));
@@ -190,7 +191,7 @@ void test_stream_float32() {
     f.insert(f.end(), {'W', 'A', 'V', 'E', 'f', 'm', 't', ' '});
     ts_put_u32(f, 16);
     ts_put_u16(f, 3);                                       // format tag float
-    ts_put_u16(f, 2);                                       // canales
+    ts_put_u16(f, 2);                                       // channels
     ts_put_u32(f, sr);
     ts_put_u32(f, sr * 2 * 4);                              // byte rate
     ts_put_u16(f, 2 * 4);                                   // block align
@@ -200,7 +201,7 @@ void test_stream_float32() {
     for (size_t i = 0; i < gen.size(); ++i) {
         TsFloatBits fb;
         fb.f = gen[i];
-        ts_put_u32(f, fb.u);                                // bits LE exactos
+        ts_put_u32(f, fb.u);                                // exact LE bits
     }
     {
         std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
@@ -220,15 +221,15 @@ void test_stream_float32() {
         exact = (L[i] == gen[2 * i]) && (R[i] == gen[2 * i + 1]);
     }
     check(exact, "valores float32 bit-exactos contra los generados (==)");
-    // Consistencia cruzada: read_wav decodifica lo mismo (cabecera válida).
+    // Cross-check: read_wav decodes the same (valid header).
     WavData ram;
     check(deluge_sim::read_wav(tmp, ram, err) && ram.frames() == frames &&
               ram.samples[0] == gen[0] && ram.samples[1] == gen[1],
           "read_wav del WAV fabricado coincide (cabecera estándar válida)");
 }
 
-// e) WAV truncado a mitad del data: entrega los marcos existentes y luego
-//    false con err que menciona "truncado" (sin colgarse ni lanzar).
+// e) WAV truncated mid-data: delivers the existing frames and then
+//    false with an err mentioning "truncado" (no hangs, no throws).
 void test_stream_truncated() {
     std::cout << "[test] stream: WAV truncado a mitad del data -> entrega y false\n";
     const std::string tmp = (std::filesystem::temp_directory_path() /
@@ -237,13 +238,13 @@ void test_stream_truncated() {
     std::string err;
     check(deluge_sim::write_wav16(tmp, 48000, 2, w.samples, err),
           "escritura WAV PCM16 válido (1000 marcos)");
-    {   // trunca el archivo a la mitad del data: 44 + 2000 bytes => 500 marcos
+    {   // truncates the file to half the data: 44 + 2000 bytes => 500 frames
         std::ifstream in(tmp, std::ios::binary);
         in.seekg(0, std::ios::end);
         const std::streamoff sz = in.tellg();
         in.seekg(0);
         const size_t total = size_t(sz);
-        std::vector<char> all(total);                       // variable con nombre: sin vexing parse
+        std::vector<char> all(total);                       // named variable: no vexing parse
         in.read(all.data(), sz);
         in.close();
         const size_t keep = 44 + (all.size() - 44) / 2;
@@ -274,16 +275,16 @@ void test_stream_truncated() {
     }
 }
 
-// f) Engine::run con FileAudioSource vs StreamWavSource sobre el MISMO
-//    WAV PCM16, misma cadena (ganancia x0.5) y mismo bloque: salidas
-//    bit-idénticas. Valida la refactor IAudioSource.
+// f) Engine::run with FileAudioSource vs StreamWavSource over the SAME
+//    PCM16 WAV, same chain (x0.5 gain) and same block: bit-identical
+//    outputs. Validates the IAudioSource refactor.
 class StreamGainHalf : public deluge_sim::IProcessor {
 public:
     const char* name() const override { return "stream_gain_half_test"; }
     void prepare(const deluge_sim::ProcessContext&) override {}
     void process(deluge_sim::Block& b) override {
         for (size_t i = 0; i < b.frames; ++i) {
-            b.L[i] *= 0.5f;                     // x0.5 exacto en IEEE-754
+            b.L[i] *= 0.5f;                     // exact x0.5 in IEEE-754
             if (b.channels == 2) b.R[i] *= 0.5f;
         }
     }
@@ -300,7 +301,7 @@ void test_stream_engine_bitexact() {
     check(deluge_sim::write_wav16(tmp, 48000, 2, w.samples, err),
           "escritura WAV PCM16 de entrada (5000 marcos)");
 
-    // Ruta A: fuente en RAM.
+    // Path A: RAM source.
     WavData ram;
     check(deluge_sim::read_wav(tmp, ram, err), "lectura RAM del mismo WAV");
     deluge_sim::Engine eng_a(48000.0, 512);
@@ -314,8 +315,8 @@ void test_stream_engine_bitexact() {
                                "deluge_sim_test_stream_out_a.wav").string();
     check(sink_a.finalize(out_a, err), "escritura de la salida A");
 
-    // Ruta B: fuente en streaming desde el MISMO archivo (mismo bloque y
-    // misma cadena; el engine acepta cualquier IAudioSource).
+    // Path B: streaming source from the SAME file (same block and
+    // same chain; the engine accepts any IAudioSource).
     deluge_sim::StreamWavSource src_b(tmp, err);
     check(src_b.frames_total() == 5000, "streaming: 5000 marcos totales");
     deluge_sim::Engine eng_b(48000.0, 512);
@@ -328,7 +329,7 @@ void test_stream_engine_bitexact() {
                                "deluge_sim_test_stream_out_b.wav").string();
     check(sink_b.finalize(out_b, err), "escritura de la salida B");
 
-    // Comparación bit a bit de ambas salidas relesídas.
+    // Bit-for-bit comparison of both re-read outputs.
     WavData a, b;
     check(deluge_sim::read_wav(out_a, a, err) &&
               deluge_sim::read_wav(out_b, b, err),

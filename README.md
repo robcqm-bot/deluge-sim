@@ -209,5 +209,6 @@ free of host-framework includes (that's the point of the firewall).
 
 ## License
 
-GPL-3.0 — see [LICENSE](LICENSE). Code comments are partially in Spanish;
-English translations are welcome.
+GPL-3.0 — see [LICENSE](LICENSE). All code comments are in English;
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) is currently Spanish-only
+(translations welcome).

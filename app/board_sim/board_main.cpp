@@ -1,26 +1,26 @@
 // =====================================================================
-// deluge-sim / board_main.cpp — boardsim: simulador de placa (fase 2)
+// deluge-sim / board_main.cpp — boardsim: board simulator (phase 2)
 //
-//   boardsim --sd CARPETA [--song N] [--preset N] [--hw-block N] [--list]
+//   boardsim --sd FOLDER [--song N] [--preset N] [--hw-block N] [--list]
 //            [k=v ...]
-//       --sd        carpeta del host que hace de "tarjeta SD" (*.wav y
-//                   *.json = presets de cadena)
-//       --song N    índice de canción inicial (default 0)
-//       --preset N  slot de preset inicial (0 = default fet76, 1..7 = SD)
-//       --hw-block  marcos por bloque hardware (default 128, rango [8,4096])
-//       --list      lista canciones y presets y sale (sin ventana)
-//       k válidos (fet76): thresh_db ratio attack_s release_s
-//                          in_gain_db out_gain_db
+//       --sd        host folder acting as the "SD card" (*.wav and
+//                   *.json = chain presets)
+//       --song N    initial song index (default 0)
+//       --preset N  initial preset slot (0 = default fet76, 1..7 = SD)
+//       --hw-block  frames per hardware block (default 128, range [8,4096])
+//       --list      lists songs and presets and exits (no window)
+//       valid k (fet76): thresh_db ratio attack_s release_s
+//                        in_gain_db out_gain_db
 //
-//   Controles: ESPACIO play/stop | B bypass | ARRIBA/ABAJO canción |
-//              IZQ/DER slot de preset | S guarda preset en la SD |
-//              click en pads | ESC o cerrar ventana = salir
-//   Pads: fila 0 = PLAY/BYPASS, fila 7 = slots de preset (col 0 = default),
-//   resto libres.
+//   Controls: SPACE play/stop | B bypass | UP/DOWN song |
+//             LEFT/RIGHT preset slot | S saves preset to the SD |
+//             click on pads | ESC or closing the window = quit
+//   Pads: row 0 = PLAY/BYPASS, row 7 = preset slots (col 0 = default),
+//   rest free.
 //
-// La ÚNICA pieza que toca SDL2 es este archivo: board_core es SDL-free
-// (testeable headless), el cortafuegos suite_core queda intacto y la
-// fábrica de fx (fx_factory.hpp) es la misma que usa simcli.
+// The ONLY piece that touches SDL2 is this file: board_core is SDL-free
+// (testable headless), the suite_core firewall stays intact and the
+// fx factory (fx_factory.hpp) is the same one simcli uses.
 // =====================================================================
 #define SDL_MAIN_HANDLED
 #include <SDL2/SDL.h>
@@ -53,7 +53,7 @@ constexpr int kWindowW = 720;
 constexpr int kWindowH = 560;
 constexpr int kCellPx = 56;
 constexpr int kGapPx = 6;
-constexpr int kQueueBlocks = 8;          // bloques hardware de cola (~21 ms)
+constexpr int kQueueBlocks = 8;          // queued hardware blocks (~21 ms)
 
 void print_usage() {
     std::cout <<
@@ -91,7 +91,7 @@ bool parse_long(const std::string& s, long& out) {
     }
 }
 
-// Dibuja un rectángulo relleno con color RGB.
+// Draws a filled rectangle with an RGB color.
 void fill_rect(SDL_Renderer* r, int x, int y, int w, int h,
                Uint8 cr, Uint8 cg, Uint8 cb) {
     SDL_SetRenderDrawColor(r, cr, cg, cb, 255);
@@ -133,7 +133,7 @@ int run_board(int argc, char** argv) {
         else if (a.find('=') != std::string::npos) {
             std::string k = a.substr(0, a.find('=')), v = a.substr(a.find('=') + 1);
             double d = 0.0;
-            // los k=v del board aplican a la cadena default (fet76)
+            // the board's k=v apply to the default chain (fet76)
             if (!key_known(k, {"fet76"}) || !parse_double(v, d)) {
                 std::cerr << "ERROR: parámetro desconocido o inválido: '" << a << "'\n"
                           << "Válidos: thresh_db ratio attack_s release_s "
@@ -154,7 +154,7 @@ int run_board(int argc, char** argv) {
         return 2;
     }
 
-    // ---- tarjeta SD (carpeta del host) ----
+    // ---- SD card (host folder) ----
     SdCard sd;
     std::string err;
     if (!sd.mount(sd_folder, err)) {
@@ -170,15 +170,15 @@ int run_board(int argc, char** argv) {
     if (list_only) return 0;
     if (size_t(song_index) >= sd.song_count()) song_index = 0;
 
-    // ---- reloj del board + cadena default (misma fábrica que simcli) ----
+    // ---- board clock + default chain (same factory as simcli) ----
     BoardClock clock;
     clock.hw_block = size_t(hw_block_d);
     BoardPump pump(clock);
 
-    // Estado de cadena/params efectivos (cambian con los slots de preset).
+    // Effective chain/params state (changes with the preset slots).
     std::vector<std::string> cur_chain{"fet76"};
-    std::map<std::string, double> cur_kv = kv;      // k=v del CLI como base
-    AdapterFet76* gr_src = nullptr;                 // medidor GR si hay fet76
+    std::map<std::string, double> cur_kv = kv;      // CLI k=v as base
+    AdapterFet76* gr_src = nullptr;                 // GR meter if fet76 present
     long preset_slot = 0;                           // 0 = default; 1..7 = SD
     for (const std::string& fx : cur_chain) {
         auto p = make_fx(fx, effective_fx_params(cur_kv, fx));
@@ -190,7 +190,7 @@ int run_board(int argc, char** argv) {
         pump.add_processor(std::move(p));
     }
 
-    // ---- carga de la canción seleccionada (debe seguir viva: es local) ----
+    // ---- loads the selected song (must stay alive: it is local) ----
     WavData song;
     auto load_song_index = [&](long idx) -> bool {
         if (!read_wav(sd.songs()[size_t(idx)], song, err)) {
@@ -213,7 +213,7 @@ int run_board(int argc, char** argv) {
     };
     if (!load_song_index(song_index)) return 3;
 
-    // ---- SDL: vídeo + audio ----
+    // ---- SDL: video + audio ----
     SDL_SetMainReady();
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
         std::cerr << "ERROR: SDL_Init: " << SDL_GetError() << "\n";
@@ -224,7 +224,7 @@ int run_board(int argc, char** argv) {
     want.freq = int(clock.sample_rate);
     want.format = AUDIO_F32SYS;
     want.channels = 2;
-    want.samples = Uint16(clock.hw_block * 2);      // ventana del dispositivo
+    want.samples = Uint16(clock.hw_block * 2);      // device window
     SDL_AudioSpec have{};
     SDL_AudioDeviceID dev = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
     if (dev == 0) {
@@ -246,9 +246,9 @@ int run_board(int argc, char** argv) {
         SDL_Quit();
         return 3;
     }
-    SDL_PauseAudioDevice(dev, 0);                   // el dispositivo corre ya
+    SDL_PauseAudioDevice(dev, 0);                   // device already running
 
-    // ---- slots de preset: 0 = default (fet76 + k=v CLI), 1..7 = SD ----
+    // ---- preset slots: 0 = default (fet76 + CLI k=v), 1..7 = SD ----
     long max_slot = std::min<long>(7, long(sd.preset_count()));
     auto apply_slot = [&](long slot) -> bool {
         pump.stop();
@@ -257,7 +257,7 @@ int run_board(int argc, char** argv) {
         gr_src = nullptr;
         if (slot <= 0) {
             cur_chain.assign(1, "fet76");
-            cur_kv = kv;                            // k=v del CLI como base
+            cur_kv = kv;                            // CLI k=v as base
         } else {
             const size_t idx = size_t(slot - 1);
             if (idx >= sd.preset_count()) return false;
@@ -303,7 +303,7 @@ int run_board(int argc, char** argv) {
 
     bool running = true;
     while (running) {
-        // ---- eventos ----
+        // ---- events ----
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_QUIT) { running = false; }
@@ -338,7 +338,7 @@ int run_board(int argc, char** argv) {
                         if (load_song_index(song_index)) {
                             std::cout << "SELECT " << song_index << "\n";
                         } else {
-                            running = false;        // error accionable ya impreso
+                            running = false;        // actionable error already printed
                         }
                         break;
                     }
@@ -348,7 +348,7 @@ int run_board(int argc, char** argv) {
                         apply_slot((preset_slot + dir + (max_slot + 1)) % (max_slot + 1));
                         break;
                     }
-                    case SDLK_s: {                  // guarda preset en la SD
+                    case SDLK_s: {                  // saves preset to the SD
                         ChainPreset pr;
                         pr.version = 1;
                         pr.chain = cur_chain;
@@ -370,7 +370,7 @@ int run_board(int argc, char** argv) {
                             std::cerr << "ERROR: " << err << "\n";
                             break;
                         }
-                        sd.mount(sd.folder(), err);   // re-escanea la SD
+                        sd.mount(sd.folder(), err);   // re-scans the SD
                         max_slot = std::min<long>(7, long(sd.preset_count()));
                         long newslot = 0;
                         for (size_t i = 0; i < sd.preset_count(); ++i)
@@ -405,27 +405,27 @@ int run_board(int argc, char** argv) {
                         pump.set_bypass(!pump.bypassed());
                         pads.set_bypassed(pump.bypassed());
                         std::cout << (pump.bypassed() ? "BYPASS ON\n" : "BYPASS OFF\n");
-                    } else if (row == kPadRows - 1) {    // fila 7: slots de preset
+                    } else if (row == kPadRows - 1) {    // row 7: preset slots
                         if (col <= max_slot) apply_slot(col);
                     } else {
-                        pads.toggle(row, col);           // pads libres
+                        pads.toggle(row, col);           // free pads
                     }
                 }
             }
         }
 
-        // ---- lazo de cadencia fija: llena la cola del dispositivo ----
+        // ---- fixed-cadence loop: fills the device queue ----
         pump.set_bypass(pads.is_bypassed());
         if (pads.is_playing()) {
             const size_t queued = SDL_GetQueuedAudioSize(dev);
             if (queued == 0) {
-                if (!starved) { ++underruns; starved = true; }  // el dispositivo se quedó sin datos
+                if (!starved) { ++underruns; starved = true; }  // device ran out of data
             } else {
                 starved = false;
             }
             while (pads.is_playing() && SDL_GetQueuedAudioSize(dev) < target_bytes) {
                 size_t n = pump.pump(outbuf.data(), clock.hw_block);
-                if (n == 0) {                            // fin de canción
+                if (n == 0) {                            // end of song
                     pads.set_playing(false);
                     SDL_ClearQueuedAudio(dev);
                     std::cout << "FIN DE CANCIÓN (auto-stop)\n";
@@ -435,20 +435,20 @@ int run_board(int argc, char** argv) {
             }
         }
 
-        // ---- dibujo ----
+        // ---- drawing ----
         fill_rect(ren, 0, 0, kWindowW, kWindowH, 24, 26, 30);
         for (int r = 0; r < kPadRows; ++r) {
             for (int c = 0; c < kPadCols; ++c) {
                 const int x = x0 + c * (kCellPx + kGapPx);
                 const int y = y0 + r * (kCellPx + kGapPx);
-                Uint8 cr = 44, cg = 48, cb = 56;         // apagado
+                Uint8 cr = 44, cg = 48, cb = 56;         // off
                 if (r == 0 && c == 0) {                  // PLAY
                     if (pads.is_lit(r, c)) { cr = 60; cg = 220; cb = 120; }
                     else { cr = 34; cg = 70; cb = 50; }
                 } else if (r == 0 && c == 1) {           // BYPASS
                     if (pads.is_lit(r, c)) { cr = 240; cg = 180; cb = 60; }
                     else { cr = 80; cg = 62; cb = 30; }
-                } else if (r == kPadRows - 1) {          // slots de preset
+                } else if (r == kPadRows - 1) {          // preset slots
                     if (c == preset_slot) { cr = 210; cg = 120; cb = 255; }
                     else if (c <= max_slot) { cr = 58; cg = 42; cb = 74; }
                 } else if (pads.is_lit(r, c)) {
@@ -457,28 +457,28 @@ int run_board(int argc, char** argv) {
                 fill_rect(ren, x, y, kCellPx, kCellPx, cr, cg, cb);
             }
         }
-        // Barra de progreso (playhead) bajo el grid.
+        // Progress bar (playhead) under the grid.
         const double frac = song.frames() > 0
             ? double(pump.stats().frames_rendered) / double(song.frames()) : 0.0;
         fill_rect(ren, x0, kWindowH - 56, grid_w, 10, 60, 64, 72);
         fill_rect(ren, x0, kWindowH - 56,
                   int(grid_w * (frac > 1.0 ? 1.0 : frac)), 10, 120, 200, 255);
-        // Medidor de GR del fet76 (0 dB arriba, -24 dB abajo) a la derecha;
-        // si la cadena no tiene fet76, el carril queda apagado.
+        // fet76 GR meter (0 dB top, -24 dB bottom) on the right;
+        // if the chain has no fet76, the lane stays off.
         const int mx = x0 + grid_w + 12;
         const int mh = kPadRows * kCellPx + 7 * kGapPx;
         fill_rect(ren, mx, y0, 14, mh, 60, 64, 72);
         if (gr_src) {
             const double gr = gr_src->gr_db();           // [0, -24]
-            const double grf = (0.0 - gr) / 24.0;        // 0=sin GR, 1=GR máx
+            const double grf = (0.0 - gr) / 24.0;        // 0=no GR, 1=max GR
             const double gf = (grf < 0.0) ? 0.0 : (grf > 1.0 ? 1.0 : grf);
             fill_rect(ren, mx, y0, 14, int(double(mh) * gf), 220, 90, 90);
         }
         SDL_RenderPresent(ren);
-        SDL_Delay(5);                                    // ~200 fps de UI, sobra
+        SDL_Delay(5);                                    // ~200 fps UI, plenty
     }
 
-    // ---- salida con telemetría ----
+    // ---- exit with telemetry ----
     const RunReport& st = pump.stats();
     const double wall = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - t0).count();

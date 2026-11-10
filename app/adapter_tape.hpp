@@ -1,7 +1,7 @@
 // =====================================================================
-// deluge-sim / adapter_tape.hpp — Adaptador del procesador de cinta
-// Mismo patrón de cortafuegos que adapter_opto.hpp: único puente
-// delimitado entre deluge_sim y suite_core para TapeSatRef.
+// deluge-sim / adapter_tape.hpp — Tape processor adapter
+// Same firewall pattern as adapter_opto.hpp: only bounded
+// bridge between deluge_sim and suite_core for TapeSatRef.
 // =====================================================================
 #pragma once
 #include "deluge_sim/core.hpp"

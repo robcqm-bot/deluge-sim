@@ -1,7 +1,7 @@
 // =====================================================================
-// SUITE-CORE / plate_reverb.cpp — Reverb de placa FDN (referencia)
-// Zona propia del cortafuegos: solo C++ estándar. Sin allocaciones en
-// process(); sin excepciones; salida siempre finita.
+// SUITE-CORE / plate_reverb.cpp — FDN plate reverb (reference)
+// Firewall own zone: standard C++ only. No allocations in process();
+// no exceptions; output always finite.
 // =====================================================================
 #include "suite_core/plate_reverb.hpp"
 
@@ -10,8 +10,8 @@
 
 namespace suite_core {
 
-// Longitudes base @48 kHz (muestras): impares y coprimas entre sí para
-// maximizar la densidad modal. Se re-escalan con fs.
+// Base lengths @48 kHz (samples): odd and pairwise coprime to maximize
+// modal density. Re-scaled with fs.
 const size_t PlateReverbRef::kBaseSamples[kLines] = {
     1543, 2093, 2543, 2957, 3497, 3967, 4487, 4897};
 
@@ -25,8 +25,8 @@ void PlateReverbRef::ModDelay::resize(size_t samples, size_t extra) {
 }
 
 double PlateReverbRef::ModDelay::read(double offset) const {
-    // Lectura fraccional hacia atrás desde wpos (offset >= 1 garantizado
-    // por el llamador: base + mod nunca baja de 1).
+    // Fractional read backwards from wpos (offset >= 1 guaranteed by
+    // the caller: base + mod never drops below 1).
     double rpos = double(wpos) - offset;
     const size_t n = buf.size();
     while (rpos < 0.0) rpos += double(n);
@@ -65,7 +65,7 @@ void PlateReverbRef::Allpass::clear() {
     wpos = 0;
 }
 
-// --------------------------- configuración ---------------------------
+// ------------------------------- setup -------------------------------
 void PlateReverbRef::set_sample_rate(double sr) {
     sample_rate_ = (sr > 0.0) ? sr : 48000.0;
     const double scale = sample_rate_ / 48000.0;
@@ -84,25 +84,25 @@ void PlateReverbRef::set_sample_rate(double sr) {
 }
 
 void PlateReverbRef::recompute_coefficients() {
-    // g_i = 10^(-3·t_i/RT60): cada línea decae 10^(-3t/RT60) por unidad
-    // de tiempo => toda la cola decae exactamente a decay_s (en graves).
+    // g_i = 10^(-3·t_i/RT60): each line decays 10^(-3t/RT60) per unit
+    // of time => the whole tail decays at exactly decay_s (at low end).
     const double rt60 = params_.decay_s;
     for (int i = 0; i < kLines; ++i) {
         const double t_i = double(line_[i].base) / sample_rate_;
         line_gain_[i] = std::pow(10.0, -3.0 * t_i / rt60);
     }
-    // Damping: fc en log-escala 20 kHz (0%) -> 800 Hz (100%).
+    // Damping: fc on a log scale 20 kHz (0%) -> 800 Hz (100%).
     const double pct = params_.damp_pct / 100.0;
     const double fc = std::exp(std::log(20000.0) +
                                pct * std::log(800.0 / 20000.0));
     damp_coef_ = 1.0 - std::exp(-2.0 * 3.14159265358979323846 * fc / sample_rate_);
-    // LFO y modulación.
+    // LFO and modulation.
     lfo_inc_ = 2.0 * 3.14159265358979323846 * params_.mod_rate_hz / sample_rate_;
     mod_depth_smp_ = params_.mod_depth_ms * sample_rate_ / 1000.0;
-    // Predelay efectivo (el buffer se dimensionó para el máximo de 200 ms).
+    // Effective predelay (the buffer was sized for the 200 ms maximum).
     predelay_.tap = std::max<size_t>(
         1, size_t(std::lround(params_.predelay_ms * sample_rate_ / 1000.0)));
-    // Mezcla y trim.
+    // Mix and trim.
     mix_ = params_.mix_pct / 100.0;
     dry_ = 1.0 - mix_;
     out_lin_ = std::exp(params_.out_gain_db * 0.11512925464970229);  // ln10/20
@@ -150,30 +150,30 @@ void PlateReverbRef::process(float* L, float* R, size_t frames) {
             if (!std::isfinite(xr)) { xr = 0.0f; ++bad_inputs_; }
         }
 
-        // ---- entrada: mono-sum -> predelay -> difusión ----
+        // ---- input: mono-sum -> predelay -> diffusion ----
         float xin = 0.5f * (xl + (R ? xr : xl));
         xin = predelay_.process(xin);
         float dif = diff_[0].process(diff_[1].process(diff_[2].process(xin)));
         const double fin = double(dif);
 
-        // ---- lecturas moduladas + damping por línea ----
+        // ---- modulated reads + per-line damping ----
         double lp[kLines];
         double tapL = 0.0, tapR = 0.0;
         for (int i = 0; i < kLines; ++i) {
             const double off = double(line_[i].base) +
                                mod_depth_smp_ * std::sin(lfo_phase_[i]);
             const double r = line_[i].read(off);
-            lp_[i] += damp_coef_ * (r - lp_[i]);          // one-pole del lazo
+            lp_[i] += damp_coef_ * (r - lp_[i]);          // loop one-pole
             lp[i] = lp_[i];
             if (i < 4) tapL += lp_[i]; else tapR += lp_[i];
             lfo_phase_[i] += lfo_inc_;
             if (lfo_phase_[i] >= 2.0 * 3.14159265358979323846)
                 lfo_phase_[i] -= 2.0 * 3.14159265358979323846;
         }
-        const double wetL = 0.5 * tapL;                   // 4 taps normalizados
+        const double wetL = 0.5 * tapL;                   // 4 normalized taps
         const double wetR = 0.5 * tapR;
 
-        // ---- matriz de Hadamard 8x8 (3 etapas mariposa) sobre g_i·lp_i ----
+        // ---- 8x8 Hadamard matrix (3 butterfly stages) over g_i·lp_i ----
         double v[kLines];
         for (int i = 0; i < kLines; ++i) v[i] = line_gain_[i] * lp[i];
         for (int stage = 0; stage < 3; ++stage) {
@@ -188,12 +188,12 @@ void PlateReverbRef::process(float* L, float* R, size_t frames) {
             }
         }
 
-        // ---- escrituras del lazo (entrada difusa + realimentación) ----
+        // ---- loop writes (diffuse input + feedback) ----
         for (int i = 0; i < kLines; ++i) {
             line_[i].write(float(fin + v[i] / kSqrt8));
         }
 
-        // ---- salida: mezcla dry/wet + trim (finita por construcción) ----
+        // ---- output: dry/wet mix + trim (finite by construction) ----
         L[n] = float(dry_ * double(xl) * out_lin_ +
                      mix_ * wetL * out_lin_);
         if (R) {

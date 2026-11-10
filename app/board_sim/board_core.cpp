@@ -1,5 +1,5 @@
 // =====================================================================
-// deluge-sim / board_core.cpp — Implementación SDL-free del board
+// deluge-sim / board_core.cpp — SDL-free board implementation
 // =====================================================================
 #include "board_core.hpp"
 
@@ -83,7 +83,7 @@ bool BoardPump::load_song(const WavData& song, std::string& err) {
         return false;
     }
 
-    // Prepara la cadena con el contexto FIJO del board (como el engine).
+    // Prepares the chain with the board's FIXED context (like the engine).
     ProcessContext ctx{clock_.sample_rate, clock_.hw_block, kMaxChannels};
     for (auto& p : chain_) {
         try {
@@ -108,12 +108,12 @@ size_t BoardPump::pump(float* out, size_t out_frames_cap) {
     const size_t n = std::min(clock_.hw_block, out_frames_cap);
     blk_.frames = 0;
     blk_.channels = 2;
-    if (!src_->read(blk_, n)) {          // fin de la canción: auto-stop
+    if (!src_->read(blk_, n)) {          // end of song: auto-stop
         stop();
         return 0;
     }
 
-    // Guarda de entrada (misma defensa en profundidad que el engine).
+    // Input guard (same defense in depth as the engine).
     for (size_t i = 0; i < blk_.frames; ++i) {
         if (!std::isfinite(blk_.L[i])) { blk_.L[i] = 0.0f; ++stats_.nonfinite_input_fixed; }
         if (!std::isfinite(blk_.R[i])) { blk_.R[i] = 0.0f; ++stats_.nonfinite_input_fixed; }
@@ -121,8 +121,8 @@ size_t BoardPump::pump(float* out, size_t out_frames_cap) {
 
     if (!bypass_) {
         for (auto& p : chain_) {
-            // El contrato IProcessor no lanza; por defensa se captura
-            // igual que en Engine::run (corrida aborta limpia).
+            // The IProcessor contract does not throw; defensively it is
+            // caught just like in Engine::run (the run aborts cleanly).
             try {
                 p->process(blk_);
             } catch (const std::exception& e) {
@@ -134,7 +134,7 @@ size_t BoardPump::pump(float* out, size_t out_frames_cap) {
         }
     }
 
-    for (size_t i = 0; i < blk_.frames; ++i) {     // planar -> intercalado
+    for (size_t i = 0; i < blk_.frames; ++i) {     // planar -> interleaved
         out[2 * i] = blk_.L[i];
         out[2 * i + 1] = blk_.R[i];
     }

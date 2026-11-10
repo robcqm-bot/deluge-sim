@@ -1,7 +1,7 @@
 // =====================================================================
-// SUITE-CORE / fet76_ref.cpp — Compresor FET feedback (referencia)
-// Zona propia del cortafuegos: solo C++ estándar. Sin allocaciones en
-// process(); sin excepciones; salida siempre finita.
+// SUITE-CORE / fet76_ref.cpp — FET feedback compressor (reference)
+// Firewall own zone: standard C++ only. No allocations in process();
+// no exceptions; output always finite.
 // =====================================================================
 #include "suite_core/fet76_ref.hpp"
 
@@ -21,7 +21,7 @@ void Fet76Ref::set_sample_rate(double sr) {
 }
 
 void Fet76Ref::recompute_coefficients() {
-    // One-pole por muestra: coef = 1 - exp(-1/(sr * tau)).
+    // Per-sample one-pole: coef = 1 - exp(-1/(sr * tau)).
     attack_coef_  = 1.0 - std::exp(-1.0 / (sample_rate_ * std::max(params_.attack_s, 1e-6)));
     release_coef_ = 1.0 - std::exp(-1.0 / (sample_rate_ * std::max(params_.release_s, 1e-4)));
     in_lin_  = std::exp(params_.in_gain_db * kDbToLn);
@@ -52,7 +52,7 @@ void Fet76Ref::reset() {
 void Fet76Ref::process(float* L, float* R, size_t frames) {
     if (!L) return;
     const double thresh = params_.thresh_db;
-    const double gr_per_over = 1.0 - 1.0 / params_.ratio;   // pendiente de la curva
+    const double gr_per_over = 1.0 - 1.0 / params_.ratio;   // curve slope
 
     for (size_t i = 0; i < frames; ++i) {
         float xl = L[i];
@@ -63,15 +63,15 @@ void Fet76Ref::process(float* L, float* R, size_t frames) {
             if (!std::isfinite(xr)) { xr = 0.0f; ++bad_inputs_; }
         }
 
-        // ---- Detector de REALIMENTACIÓN: mide la salida de la celda
-        //      (muestra anterior, antes del make-up). Enlaza canales por máx.
+        // ---- FEEDBACK detector: measures the cell output (previous
+        //      sample, before make-up). Links channels by max.
         const double lvl = std::fmax(std::fabs(y_prev_l_),
                                      R ? std::fabs(y_prev_r_) : 0.0);
         const double lvl_db = (lvl > kFloorLin) ? std::log(lvl) * kLnToDb : -240.0;
         const double over = lvl_db - thresh;
         const double target = (over > 0.0) ? -over * gr_per_over : 0.0;
 
-        // ---- Balística one-pole: attack al cerrar, release al abrir.
+        // ---- One-pole ballistics: attack when closing, release when opening.
         const double coef = (target < gr_db_) ? attack_coef_ : release_coef_;
         gr_db_ += (target - gr_db_) * coef;
 

@@ -1,5 +1,5 @@
 // =====================================================================
-// deluge-sim / engine.cpp — Pipeline: fuente -> cadena -> sumidero
+// deluge-sim / engine.cpp — Pipeline: source -> chain -> sink
 // =====================================================================
 #include "deluge_sim/engine.hpp"
 
@@ -14,12 +14,12 @@ FileAudioSource::FileAudioSource(const WavData& data) : data_(data) {}
 
 bool FileAudioSource::read(Block& b, size_t max_frames) {
     const size_t total = data_.frames();
-    if (pos_ >= total || data_.channels > kMaxChannels) return false;  // fin / no soportado
+    if (pos_ >= total || data_.channels > kMaxChannels) return false;  // end / unsupported
     const size_t n = std::min(max_frames, total - pos_);
     const uint16_t ch = data_.channels;
     const float* s = data_.samples.data() + size_t(pos_) * ch;
     if (ch == 1) {
-        for (size_t i = 0; i < n; ++i) { b.L[i] = s[i]; b.R[i] = s[i]; }  // mono->estéreo
+        for (size_t i = 0; i < n; ++i) { b.L[i] = s[i]; b.R[i] = s[i]; }  // mono->stereo
         b.channels = 2;
     } else {
         for (size_t i = 0; i < n; ++i) { b.L[i] = s[2 * i]; b.R[i] = s[2 * i + 1]; }
@@ -33,13 +33,13 @@ bool FileAudioSource::read(Block& b, size_t max_frames) {
 // ----------------------------- WavAudioSink --------------------------
 WavAudioSink::WavAudioSink(uint32_t sample_rate, uint16_t channels)
     : sample_rate_(sample_rate), channels_(channels) {
-    acc_.reserve(size_t(sample_rate) * channels);   // 1 s de reserva inicial
+    acc_.reserve(size_t(sample_rate) * channels);   // 1 s initial reserve
 }
 
 void WavAudioSink::write(const Block& b) {
     const size_t n = b.frames;
     if (channels_ == 1 || b.channels == 1) {
-        for (size_t i = 0; i < n; ++i) acc_.push_back(b.L[i]);       // colapso mono
+        for (size_t i = 0; i < n; ++i) acc_.push_back(b.L[i]);       // mono collapse
     } else {
         for (size_t i = 0; i < n; ++i) {
             acc_.push_back(b.L[i]);
@@ -80,8 +80,8 @@ bool Engine::run(IAudioSource& src, WavAudioSink& sink,
     const auto t0 = std::chrono::steady_clock::now();
 
     while (src.read(b, max_block_)) {
-        // Guarda de entrada: sustituye no-finitos por 0 (defensa en profundidad;
-        // los procesadores además tienen su propio guardia interno).
+        // Input guard: replaces non-finite values with 0 (defense in depth;
+        // processors also have their own internal guard).
         for (size_t i = 0; i < b.frames; ++i) {
             if (!std::isfinite(b.L[i])) { b.L[i] = 0.0f; ++report.nonfinite_input_fixed; }
             if (!std::isfinite(b.R[i])) { b.R[i] = 0.0f; ++report.nonfinite_input_fixed; }

@@ -1,9 +1,9 @@
 // =====================================================================
-// deluge-sim / adapter_fet76.hpp — EL ADAPTADOR (cortafuegos)
-// Único puente delimitado entre deluge_sim y suite_core: traduce
-// deluge_sim::Block (planar) a punteros crudos float* (tipo suite-core).
-// Compartido por simcli (main.cpp) y boardsim (board_main.cpp).
-// En la integración real al firmware este archivo vive en
+// deluge-sim / adapter_fet76.hpp — THE ADAPTER (firewall)
+// Only bounded bridge between deluge_sim and suite_core: translates
+// deluge_sim::Block (planar) to raw float* pointers (suite-core style).
+// Shared by simcli (main.cpp) and boardsim (board_main.cpp).
+// In the real firmware integration this file lives in
 // src/deluge/dsp/suite/fet76_adapter.cpp.
 // =====================================================================
 #pragma once
@@ -12,8 +12,8 @@
 
 namespace deluge_sim {
 
-// Capa app (fuera del cortafuegos): conoce ambos lados y no expone
-// tipos de suite_core salvo por los Params del constructor.
+// App layer (outside the firewall): knows both sides and does not expose
+// suite_core types except through the constructor Params.
 class AdapterFet76 : public IProcessor {
 public:
     explicit AdapterFet76(const suite_core::Fet76Ref::Params& p) { f_.set_params(p); }

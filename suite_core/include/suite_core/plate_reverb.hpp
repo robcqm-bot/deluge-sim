@@ -1,38 +1,38 @@
 // =====================================================================
-// SUITE-CORE / plate_reverb.hpp — ZONA PROPIA (cortafuegos GPL)
+// SUITE-CORE / plate_reverb.hpp — OWN ZONE (GPL firewall)
 // =====================================================================
-// REGLA DEL CORTAFUEGOS: este módulo NO incluye ningún header de
-// deluge_sim ni del firmware Deluge. Solo C++ estándar + buffers crudos.
+// FIREWALL RULE: this module does NOT include any header from
+// deluge_sim or the Deluge firmware. Standard C++ only + raw buffers.
 //
-// PlateReverbRef: reverb de placa de referencia (carácter de placa de
-// manual: cola densa, decaimiento suave, decorrelación estéreo).
-// Diseño genérico FDN — NO es un port de producto alguno.
+// PlateReverbRef: reference plate reverb (textbook plate character:
+// dense tail, smooth decay, stereo decorrelation).
+// Generic FDN design — NOT a port of any product.
 //
-// Modelo documentado (verificado por tests con expectativa matemática):
-//   FDN de 8 líneas de retardo → damping one-pole por línea → matriz de
-//   Hadamard 8x8 normalizada (ortogonal: conserva la energía del lazo)
-//   → ganancia de realimentación POR LÍNEA g_i = 10^(-3·t_i/RT60).
-//   Con esa fórmula, CADA línea decae 10^(-3t/RT60) por unidad de tiempo
-//   => la cola entera decae exactamente a RT60 = decay_s (a graves, donde
-//   el damping es ~unitario). La matriz ortogonal evita que el lazo
-//   explote: energía × g² por vuelta.
+// Documented model (verified by tests with mathematical expectation):
+//   FDN of 8 delay lines → one-pole damping per line → normalized 8x8
+//   Hadamard matrix (orthogonal: preserves loop energy) → per-LINE
+//   feedback gain g_i = 10^(-3·t_i/RT60).
+//   With that formula, EACH line decays 10^(-3t/RT60) per unit of time
+//   => the whole tail decays at exactly RT60 = decay_s (at low
+//   frequencies, where damping is ~unity). The orthogonal matrix keeps
+//   the loop from blowing up: energy × g² per round trip.
 //
-//   Cadena de entrada: mono-sum 0.5(L+R) -> predelay -> 3 allpass de
-//   Schroeder (difusión). Salida mojada: taps 0-3 = L, taps 4-7 = R
-//   (decorrelación estéreo por grupos de líneas).
+//   Input chain: mono-sum 0.5(L+R) -> predelay -> 3 Schroeder allpass
+//   stages (diffusion). Wet output: taps 0-3 = L, taps 4-7 = R (stereo
+//   decorrelation by line groups).
 //
-//   Modulación: cada línea lee con offset sinusoidal (profundidad
-//   mod_depth_ms, tasas mod_rate_hz, fases repartidas 2πi/8) con
-//   interpolación lineal — siembra los modos de la placa.
+//   Modulation: each line reads with a sinusoidal offset (depth
+//   mod_depth_ms, rates mod_rate_hz, phases spread 2πi/8) with linear
+//   interpolation — seeds the plate modes.
 //
-//   Damping: fc recorre log-escala de 20 kHz (damp 0%) a 800 Hz (damp
-//   100%); coeficiente c = 1 - exp(-2π·fc/fs). En el lajo multiplica
-//   una vez por vuelta (t_i por vuelta) => el decaimiento HF es más
-//   rápido que el LF cuando damp > 0.
+//   Damping: fc sweeps the log scale from 20 kHz (damp 0%) to 800 Hz
+//   (damp 100%); coefficient c = 1 - exp(-2π·fc/fs). In the loop it
+//   multiplies once per round (t_i per round) => HF decay is faster
+//   than LF when damp > 0.
 //
-//   Bypass exacto: mix 0% => salida == entrada bit a bit. Wet 100%:
-//   la salida es exactamente 0 hasta predelay + primera línea (el
-//   contenido del FDN arranca en cero).
+//   Exact bypass: mix 0% => output == input bit for bit. Wet 100%:
+//   the output is exactly 0 until predelay + first line (the FDN
+//   content starts from zero).
 // =====================================================================
 #pragma once
 #include <cstddef>
@@ -43,25 +43,25 @@ namespace suite_core {
 
 class PlateReverbRef {
 public:
-    static constexpr int kLines = 8;           // líneas del FDN (público p/ UI)
+    static constexpr int kLines = 8;           // FDN lines (public for UI)
 
     struct Params {
-        double decay_s     = 2.4;    // RT60 objetivo, 0.2..20 s
-        double damp_pct    = 30.0;   // 0..100 (0 = sin damping HF)
+        double decay_s     = 2.4;    // target RT60, 0.2..20 s
+        double damp_pct    = 30.0;   // 0..100 (0 = no HF damping)
         double predelay_ms = 20.0;   // 0..200
-        double mod_rate_hz = 0.6;    // 0..8 (LFO común de las 8 líneas)
-        double mod_depth_ms = 0.6;   // 0..2 (profundidad del offset)
-        double mix_pct     = 30.0;   // 0..100 (0 = seco, 100 = mojado)
+        double mod_rate_hz = 0.6;    // 0..8 (LFO shared by the 8 lines)
+        double mod_depth_ms = 0.6;   // 0..2 (offset depth)
+        double mix_pct     = 30.0;   // 0..100 (0 = dry, 100 = wet)
         double out_gain_db = 0.0;    // -24..24
     };
 
-    void set_sample_rate(double sr);           // recalcula longitudes/ganancias
-    void prepare();                            // reset de estado dinámico
-    void set_params(const Params& p);          // sujeta a rangos (clamp)
+    void set_sample_rate(double sr);           // recomputes lengths/gains
+    void prepare();                            // resets dynamic state
+    void set_params(const Params& p);          // clamps to valid ranges
     const Params& params() const { return params_; }
 
-    // Procesa in-place. R == nullptr => camino mono (usa solo L).
-    // Garantías: sin allocaciones, sin excepciones, salida finita.
+    // Processes in-place. R == nullptr => mono path (uses L only).
+    // Guarantees: no allocations, no exceptions, finite output.
     void process(float* L, float* R, size_t frames);
 
     void reset();
@@ -69,18 +69,18 @@ public:
     uint64_t bad_input_count() const { return bad_inputs_; }
 
 private:
-    // Línea de retardo con lectura fraccional (interpolación lineal)
-    // para la modulación. El buffer es potencia-de-2 libre: circular.
+    // Delay line with fractional read (linear interpolation) for the
+    // modulation. The buffer needs no power-of-2 size: circular.
     struct ModDelay {
         std::vector<float> buf;
-        size_t wpos = 0;                       // índice de escritura siguiente
-        size_t base = 1;                       // longitud base en muestras
-        size_t tap = 1;                        // offset de lectura para process()
+        size_t wpos = 0;                       // next write index
+        size_t base = 1;                       // base length in samples
+        size_t tap = 1;                        // read offset for process()
         void resize(size_t samples, size_t extra);
         double read(double offset) const;      // offset >= 1
         void write(float v);
         void clear();
-        // Retardo simple (predelay): lee a 'tap' y escribe x.
+        // Simple delay (predelay): reads at 'tap' and writes x.
         double process(double x) {
             const double r = read(double(tap));
             write(float(x));
@@ -88,7 +88,7 @@ private:
         }
     };
 
-    // Allpass de Schroeder de una etapa: y = -g·x + x[n-D] + g·y[n-D].
+    // Single-stage Schroeder allpass: y = -g·x + x[n-D] + g·y[n-D].
     struct Allpass {
         std::vector<float> buf;
         size_t wpos = 0;
@@ -103,16 +103,16 @@ private:
     Params params_{};
     double sample_rate_ = 48000.0;
 
-    // 8 líneas + estados (longitudes base @48k en muestras, coprimas entre sí)
+    // 8 lines + states (base lengths @48k in samples, pairwise coprime)
     static const size_t kBaseSamples[kLines];
     ModDelay line_[kLines];
-    double lp_[kLines] = {};                   // estado del damping por línea
-    double damp_coef_ = 1.0;                   // 1 = sin damping
+    double lp_[kLines] = {};                   // per-line damping state
+    double damp_coef_ = 1.0;                   // 1 = no damping
     double line_gain_[kLines] = {};            // g_i = 10^(-3 t_i / RT60)
 
-    double lfo_phase_[kLines] = {};            // fase actual de cada LFO
-    double lfo_inc_ = 0.0;                     // 2π·rate/fs por muestra
-    double mod_depth_smp_ = 0.0;               // profundidad en muestras
+    double lfo_phase_[kLines] = {};            // current phase of each LFO
+    double lfo_inc_ = 0.0;                     // 2π·rate/fs per sample
+    double mod_depth_smp_ = 0.0;               // depth in samples
 
     ModDelay predelay_;
     Allpass diff_[3];

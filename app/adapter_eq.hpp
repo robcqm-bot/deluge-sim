@@ -1,7 +1,7 @@
 // =====================================================================
-// deluge-sim / adapter_eq.hpp — Adaptador del EQ pasivo de programa
-// Mismo patrón de cortafuegos que adapter_fet76.hpp: único puente
-// delimitado entre deluge_sim y suite_core para PassiveEQRef.
+// deluge-sim / adapter_eq.hpp — Passive program EQ adapter
+// Same firewall pattern as adapter_fet76.hpp: only bounded
+// bridge between deluge_sim and suite_core for PassiveEQRef.
 // =====================================================================
 #pragma once
 #include "deluge_sim/core.hpp"

@@ -1,11 +1,11 @@
 // =====================================================================
-// deluge-sim / fx_factory.hpp — Registro de FX compartido (capa app)
-// ÚNICA fuente de verdad de: claves válidas por fx, defaults efectivos
-// y construcción de procesadores desde un mapa de parámetros.
-// Lo consumen simcli (main.cpp) y boardsim (board_main.cpp) — así el
-// CLI y el board no pueden divergir en defaults ni en claves.
-// Capa app: conoce deluge_sim y los adaptadores; nunca cruza a suite_core
-// directamente (los adaptadores son el puente).
+// deluge-sim / fx_factory.hpp — Shared FX registry (app layer)
+// SINGLE source of truth for: valid keys per fx, effective defaults,
+// and building processors from a parameter map.
+// Consumed by simcli (main.cpp) and boardsim (board_main.cpp) — so the
+// CLI and the board cannot diverge in defaults or keys.
+// App layer: knows deluge_sim and the adapters; never crosses into
+// suite_core directly (the adapters are the bridge).
 // =====================================================================
 #pragma once
 #include "adapter_eq.hpp"
@@ -22,8 +22,8 @@
 
 namespace deluge_sim {
 
-// Claves k=v conocidas por cada fx (sin prefijo). El prefijo "fx." dirige
-// a un solo eslabón de la cadena.
+// k=v keys known by each fx (unprefixed). The "fx." prefix targets
+// a single link of the chain.
 inline const std::map<std::string, std::vector<const char*>>& fx_keys() {
     static const std::map<std::string, std::vector<const char*>> m = {
         {"fet76", {"in_gain_db", "thresh_db", "ratio", "attack_s",
@@ -40,8 +40,8 @@ inline const std::map<std::string, std::vector<const char*>>& fx_keys() {
     return m;
 }
 
-// La clave es válida si: sin prefijo y la tiene algún fx de la cadena,
-// o con prefijo "fx." y la tiene ese fx.
+// A key is valid if: unprefixed and some fx in the chain has it,
+// or with the "fx." prefix and that fx has it.
 inline bool key_known(const std::string& k, const std::vector<std::string>& chain) {
     const size_t dot = k.find('.');
     if (dot != std::string::npos) {
@@ -60,8 +60,8 @@ inline bool key_known(const std::string& k, const std::vector<std::string>& chai
     return false;
 }
 
-// Valor de 'key' para el fx 'name': primero el prefijado "name.key",
-// luego el sin prefijo (se aplica a todos), y si no existe el default.
+// Value of 'key' for fx 'name': first the prefixed "name.key",
+// then the unprefixed one (applies to all), and otherwise the default.
 inline double kv_val(const std::map<std::string, double>& kv,
                      const std::string& name, const char* key, double def) {
     auto it = kv.find(name + "." + key);
@@ -70,7 +70,7 @@ inline double kv_val(const std::map<std::string, double>& kv,
     return (it != kv.end()) ? it->second : def;
 }
 
-// Valores EFECTIVOS por fx: defaults del struct + k=v (con o sin prefijo).
+// EFFECTIVE values per fx: struct defaults + k=v (prefixed or not).
 inline std::map<std::string, double> effective_fx_params(
     const std::map<std::string, double>& kv, const std::string& fx) {
     std::map<std::string, double> m;
@@ -113,9 +113,9 @@ inline double getd(const std::map<std::string, double>& m, const char* k, double
 }
 } // namespace detail
 
-// Construye el procesador del fx 'name' a partir de un mapa de parámetros
-// (tolera mapas parciales: lo ausente toma default). nullptr si el fx es
-// desconocido. set_params centraliza el clamp.
+// Builds the processor for fx 'name' from a parameter map
+// (tolerates partial maps: missing entries take the default). nullptr if
+// the fx is unknown. set_params centralizes clamping.
 inline std::unique_ptr<IProcessor> make_fx(
     const std::string& name, const std::map<std::string, double>& p) {
     using detail::getd;

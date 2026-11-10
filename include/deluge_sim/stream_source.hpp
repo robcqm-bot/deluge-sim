@@ -1,9 +1,9 @@
 // =====================================================================
-// deluge-sim / stream_source.hpp — Fuente WAV en streaming desde disco
-// Lee el WAV por bloques (sin cargar el archivo completo a RAM) para
-// soportar renders de horas. Misma semántica de lectura que
-// FileAudioSource (planar L/R, mono->estéreo, bloque parcial final) y
-// mismas reglas de validación de cabecera que read_wav.
+// deluge-sim / stream_source.hpp — Streaming WAV source from disk
+// Reads the WAV block by block (without loading the whole file into RAM)
+// to support hour-long renders. Same read semantics as
+// FileAudioSource (planar L/R, mono->stereo, partial final block) and
+// same header validation rules as read_wav.
 // =====================================================================
 #pragma once
 #include "deluge_sim/engine.hpp"
@@ -16,61 +16,61 @@
 
 namespace deluge_sim {
 
-// Fuente de audio que decodifica el WAV incrementalmente desde disco.
-// Comporta los formatos PCM16/24/32 y float32 (y WAVE_FORMAT_EXTENSIBLE
-// leyendo el subformato), igual que read_wav.
+// Audio source that decodes the WAV incrementally from disk.
+// Handles PCM16/24/32 and float32 formats (and WAVE_FORMAT_EXTENSIBLE
+// via its subformat), just like read_wav.
 class StreamWavSource : public IAudioSource {
 public:
-    // Abre 'path' y valida la cabecera RIFF con las mismas reglas que
-    // read_wav: chunk 'fmt ' obligatorio, chunk 'data' truncado se recorta
-    // al tamaño real del archivo, sample rate 1..768000 (0 o absurdo =>
-    // rechazo), WAVE_FORMAT_EXTENSIBLE resuelto por su subformato.
-    // Acepta 1 o 2 canales: 1 canal se pliega a estéreo al leer, 2 van
-    // directos; más de 2 => el constructor falla con 'err' accionable.
-    // En fallo el objeto queda inutilizable (read() devuelve siempre false)
-    // y 'err' explica el motivo.
+    // Opens 'path' and validates the RIFF header with the same rules as
+    // read_wav: 'fmt ' chunk required, truncated 'data' chunk is clipped
+    // to the real file size, sample rate 1..768000 (0 or absurd =>
+    // rejection), WAVE_FORMAT_EXTENSIBLE resolved via its subformat.
+    // Accepts 1 or 2 channels: 1 channel is folded to stereo on read, 2
+    // pass through; more than 2 => the constructor fails with an
+    // actionable 'err'. On failure the object is left unusable (read()
+    // always returns false) and 'err' explains the reason.
     StreamWavSource(const std::string& path, std::string& err);
 
-    // Igual que FileAudioSource::read: llena b (planar L/R, mono->estéreo)
-    // con hasta max_frames marcos; false = fin de stream. Lee del disco
-    // SOLO los bytes necesarios (buffer interno de ~64 KiB reservado una
-    // vez, sin allocaciones por muestra). Si el chunk 'data' declaraba más
-    // bytes de los que el archivo tiene, entrega los marcos existentes y
-    // la primera vez que se agota devuelve false dejando en error() un
-    // mensaje que menciona "truncado" (comportamiento documentado).
+    // Same as FileAudioSource::read: fills b (planar L/R, mono->stereo)
+    // with up to max_frames frames; false = end of stream. Reads from disk
+    // ONLY the necessary bytes (internal ~64 KiB buffer reserved once,
+    // no per-sample allocations). If the 'data' chunk declared more bytes
+    // than the file has, delivers the existing frames and the first time
+    // it is exhausted returns false leaving in error() a message that
+    // mentions "truncado" (documented behavior).
     bool read(Block& b, size_t max_frames) override;
 
     uint32_t sample_rate() const { return sample_rate_; }
-    uint16_t channels() const { return channels_; }   // canales del archivo
+    uint16_t channels() const { return channels_; }   // channels in the file
     size_t frames_total() const { return frames_total_; }
 
-    // Último error de lectura (no vacío solo tras detectar truncado o un
-    // fallo de E/S a mitad de stream).
+    // Last read error (non-empty only after detecting truncation or an
+    // I/O failure mid-stream).
     const std::string& error() const { return err_; }
 
 private:
-    bool fill_buffer();          // trae el siguiente chunk de marcos a buf_
+    bool fill_buffer();          // brings the next chunk of frames into buf_
 
     std::ifstream file_;
-    std::vector<uint8_t> buf_;        // buffer de lectura (una sola reserva)
-    size_t buf_frames_cap_ = 0;       // marcos que caben en buf_
-    size_t buf_frames_ = 0;           // marcos válidos en buf_
-    size_t buf_pos_ = 0;              // marco siguiente a consumir de buf_
-    uint64_t data_remaining_ = 0;     // bytes de 'data' pendientes en disco
-    uint64_t data_declared_ = 0;      // bytes declarados por el chunk 'data'
-    uint64_t data_size_ = 0;          // bytes realmente disponibles (clamp)
-    size_t frame_bytes_ = 0;          // canales * bytes_por_muestra
-    size_t frames_total_ = 0;         // marcos entregables (como read_wav)
-    size_t frames_done_ = 0;          // marcos ya entregados
-    uint16_t bits_ = 0;               // bits por muestra (16/24/32)
+    std::vector<uint8_t> buf_;        // read buffer (single allocation)
+    size_t buf_frames_cap_ = 0;       // frames that fit in buf_
+    size_t buf_frames_ = 0;           // valid frames in buf_
+    size_t buf_pos_ = 0;              // next frame to consume from buf_
+    uint64_t data_remaining_ = 0;     // bytes of 'data' still on disk
+    uint64_t data_declared_ = 0;      // bytes declared by the 'data' chunk
+    uint64_t data_size_ = 0;          // bytes actually available (clamped)
+    size_t frame_bytes_ = 0;          // channels * bytes_per_sample
+    size_t frames_total_ = 0;         // deliverable frames (as read_wav)
+    size_t frames_done_ = 0;          // frames already delivered
+    uint16_t bits_ = 0;               // bits per sample (16/24/32)
     uint16_t bytes_per_ = 0;          // bits/8
-    uint16_t format_ = 0;             // 1 = PCM, 3 = float (tras subformato)
+    uint16_t format_ = 0;             // 1 = PCM, 3 = float (after subformat)
     uint32_t sample_rate_ = 0;
     uint16_t channels_ = 0;
-    bool usable_ = false;             // false si el constructor falló
-    bool truncated_ = false;          // 'data' declaraba más de lo que hay
-    bool io_failed_ = false;          // E/S corta a mitad de stream
-    bool trunc_reported_ = false;     // err_ ya rellenado (solo la 1ª vez)
+    bool usable_ = false;             // false if the constructor failed
+    bool truncated_ = false;          // 'data' declared more than exists
+    bool io_failed_ = false;          // short I/O mid-stream
+    bool trunc_reported_ = false;     // err_ already set (first time only)
     std::string err_;
 };
 

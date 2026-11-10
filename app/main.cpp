@@ -1,17 +1,17 @@
 // =====================================================================
-// deluge-sim / main.cpp — simcli: CLI del simulador (harness offline)
+// deluge-sim / main.cpp — simcli: simulator CLI (offline harness)
 //
-//   simcli render --in entrada.wav --out salida.wav [--chain a,b] [k=v ...]
-//       --chain : fx en orden de inserción (default fet76); válidos:
+//   simcli render --in input.wav --out output.wav [--chain a,b] [k=v ...]
+//       --chain : fx in insertion order (default fet76); valid:
 //                 fet76, opto
-//       k=v     : sin prefijo se aplica a CADA fx de la cadena que tenga
-//                 ese parámetro; con prefijo "fx.k=v" solo a ese fx.
-//       --block : marcos por bloque de render
+//       k=v     : unprefixed applies to EVERY fx in the chain that has
+//                 that parameter; prefixed "fx.k=v" only to that fx.
+//       --block : frames per render block
 //   simcli help
 //
-// Aquí viven LOS ADAPTADORES (el único puente delimitado entre
-// deluge_sim y suite_core; las clases están en adapter_*.hpp). En la
-// integración real al firmware se trasladan a src/deluge/dsp/suite/.
+// THE ADAPTERS live here (the only bounded bridge between
+// deluge_sim and suite_core; the classes are in adapter_*.hpp). In the
+// real firmware integration they move to src/deluge/dsp/suite/.
 // =====================================================================
 #include "deluge_sim/engine.hpp"
 #include "deluge_sim/preset.hpp"
@@ -30,8 +30,8 @@ namespace {
 
 using namespace deluge_sim;
 
-// Las claves por fx, los defaults efectivos y la fábrica de procesadores
-// viven en fx_factory.hpp (compartidos con boardsim).
+// The per-fx keys, the effective defaults and the processor factory
+// live in fx_factory.hpp (shared with boardsim).
 
 void print_usage() {
     std::cout <<
@@ -89,7 +89,7 @@ int cmd_render(int argc, char** argv) {
             chain.clear();
             chain_from_cli = true;
             while (std::getline(ss, item, ',')) {
-                // recorta espacios del ítem
+                // trims spaces from the item
                 const size_t b = item.find_first_not_of(" \t");
                 const size_t e = item.find_last_not_of(" \t");
                 if (b == std::string::npos) continue;
@@ -112,8 +112,8 @@ int cmd_render(int argc, char** argv) {
                 std::cerr << "ERROR: valor numérico inválido en '" << a << "'\n";
                 return 2;
             }
-            kv[k] = d;                         // la validez de la clave se
-        } else {                               // comprueba tras conocer --chain
+            kv[k] = d;                         // key validity is
+        } else {                               // checked once --chain is known
             std::cerr << "ERROR: argumento no reconocido: '" << a << "'\n";
             print_usage();
             return 2;
@@ -125,8 +125,8 @@ int cmd_render(int argc, char** argv) {
         return 2;
     }
 
-    // Preset base (opcional): cadena y parámetros desde JSON. Los k=v del
-    // CLI (ya parseados) sobreescriben por encima del preset.
+    // Base preset (optional): chain and parameters from JSON. The CLI
+    // k=v (already parsed) override on top of the preset.
     std::string err;
     if (!preset_path.empty()) {
         ChainPreset pr;
@@ -137,7 +137,7 @@ int cmd_render(int argc, char** argv) {
         if (!chain_from_cli) chain = pr.chain;
         for (const auto& [fx, kvv] : pr.params)
             for (const auto& [k, v] : kvv)
-                kv.emplace(fx + "." + k, v);        // emplace: el CLI gana
+                kv.emplace(fx + "." + k, v);        // emplace: CLI wins
         std::cout << "Preset cargado: " << preset_path << "\n";
     }
 
@@ -157,8 +157,8 @@ int cmd_render(int argc, char** argv) {
         }
     }
 
-    // Parámetros por fx: defaults + preset + k=v (sin prefijo = todos los
-    // fx que tengan la clave; con prefijo = solo ese fx).
+    // Per-fx parameters: defaults + preset + k=v (unprefixed = every fx
+    // that has the key; prefixed = only that fx).
     const auto m76 = effective_fx_params(kv, "fet76");
     const auto mop = effective_fx_params(kv, "opto");
     const auto meq = effective_fx_params(kv, "eq");
@@ -247,7 +247,7 @@ int cmd_render(int argc, char** argv) {
     return 0;
 }
 
-// ------------------------- comando preset ----------------------------
+// ------------------------- preset command ----------------------------
 //   simcli preset --save FILE [--chain a,b] [k=v ...]
 //   simcli preset --load FILE
 int cmd_preset(int argc, char** argv) {

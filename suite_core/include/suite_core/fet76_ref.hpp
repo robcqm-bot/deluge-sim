@@ -1,15 +1,14 @@
 // =====================================================================
-// SUITE-CORE / fet76_ref.hpp — ZONA PROPIA (cortafuegos GPL)
+// SUITE-CORE / fet76_ref.hpp — OWN ZONE (GPL firewall)
 // =====================================================================
-// REGLA DEL CORTAFUEGOS: este módulo NO incluye ningún header de
-// deluge_sim ni del firmware Deluge. Solo C++ estándar + buffers crudos.
-// Interfaz: punteros float planar + contexto mínimo. Es lo único que
-// viaja a otro destino (M7, Teensy, VST) sin contaminación.
+// FIREWALL RULE: this module does NOT include any header from
+// deluge_sim or the Deluge firmware. Standard C++ only + raw buffers.
+// Interface: planar float pointers + minimal context. This is the only
+// thing that travels to another target (M7, Teensy, VST) uncontaminated.
 //
-// Fet76Ref v0.1: compresor estilo FET de REALIMENTACIÓN (feedback),
-// diseño genérico de manual — NO es todavía un port de producto alguno.
-// La calibración contra referencias (RE + presets NKS) se conecta
-// después DETRÁS de esta misma interfaz.
+// Fet76Ref v0.1: FET-style FEEDBACK compressor, generic textbook design
+// — NOT yet a port of any product. Calibration against references
+// (RE + NKS presets) plugs in later BEHIND this same interface.
 // =====================================================================
 #pragma once
 #include <cstddef>
@@ -24,26 +23,26 @@ struct SuiteContext {
 class Fet76Ref {
 public:
     struct Params {
-        double in_gain_db  = 0.0;     // drive hacia la celda
-        double thresh_db   = -18.0;   // umbral del detector (dBFS)
+        double in_gain_db  = 0.0;     // drive into the cell
+        double thresh_db   = -18.0;   // detector threshold (dBFS)
         double ratio       = 4.0;     // 1..20
         double attack_s    = 0.0008;  // 20e-6 .. 0.8
         double release_s   = 0.25;    // 0.01 .. 2.0
         double out_gain_db = 0.0;     // make-up
     };
 
-    void set_sample_rate(double sr);          // recalcula coeficientes
-    void prepare();                           // reset de estado dinámico
-    void set_params(const Params& p);         // sujeta a rangos (clamp)
+    void set_sample_rate(double sr);          // recomputes coefficients
+    void prepare();                           // resets dynamic state
+    void set_params(const Params& p);         // clamps to valid ranges
     const Params& params() const { return params_; }
 
-    // Procesa in-place. R == nullptr => camino mono (usa solo L).
-    // Garantías: sin allocaciones, sin excepciones, salida finita.
+    // Processes in-place. R == nullptr => mono path (uses L only).
+    // Guarantees: no allocations, no exceptions, finite output.
     void process(float* L, float* R, size_t frames);
 
-    void reset();                             // estado dinámico a arranque
+    void reset();                             // dynamic state back to startup
 
-    // Telemetría (para tests y UI): reducción de ganancia actual en dB.
+    // Telemetry (for tests and UI): current gain reduction in dB.
     double current_gr_db() const { return gr_db_; }
     uint64_t bad_input_count() const { return bad_inputs_; }
 
@@ -55,8 +54,8 @@ private:
     double attack_coef_ = 0.0;
     double release_coef_ = 0.0;
     double in_lin_ = 1.0, out_lin_ = 1.0;
-    double gr_db_ = 0.0;                      // estado del detector (<=0)
-    double y_prev_l_ = 0.0, y_prev_r_ = 0.0;  // realimentación (muestra previa)
+    double gr_db_ = 0.0;                      // detector state (<=0)
+    double y_prev_l_ = 0.0, y_prev_r_ = 0.0;  // feedback (previous sample)
     uint64_t bad_inputs_ = 0;
 };
 

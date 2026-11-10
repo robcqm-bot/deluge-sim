@@ -1,6 +1,6 @@
 // =====================================================================
-// deluge-sim / stream_source.cpp — WAV en streaming: cabecera + decode
-// incremental por bloques (sin cargar el archivo a RAM)
+// deluge-sim / stream_source.cpp — Streaming WAV: header + incremental
+// block-by-block decode (without loading the file into RAM)
 // =====================================================================
 #include "deluge_sim/stream_source.hpp"
 
@@ -13,11 +13,11 @@ namespace {
 constexpr uint16_t kFormatPcm = 1;
 constexpr uint16_t kFormatFloat = 3;
 constexpr uint16_t kFormatExtensible = 0xFFFE;
-constexpr size_t kStreamChunkBytes = 65536;      // ~64 KiB por lectura
+constexpr size_t kStreamChunkBytes = 65536;      // ~64 KiB per read
 
-// Espejo EXACTO de los helpers de wav_io.cpp: mismas reglas de lectura
-// little-endian y de decodificación para que la ruta streaming y la RAM
-// (read_wav) produzcan valores bit-idénticos. Mantener en sincronía.
+// EXACT mirror of the helpers in wav_io.cpp: same little-endian read
+// and decode rules so the streaming path and the RAM path (read_wav)
+// produce bit-identical values. Keep in sync.
 uint16_t rd_u16(const uint8_t* p) { return uint16_t(p[0]) | uint16_t(p[1]) << 8; }
 uint32_t rd_u32(const uint8_t* p) {
     return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;
@@ -35,7 +35,7 @@ float decode_sample(const uint8_t* p, uint16_t bits, uint16_t format) {
     }
     if (bits == 24) {
         int32_t v = int32_t(p[0]) | int32_t(p[1]) << 8 | int32_t(p[2]) << 16;
-        if (v & 0x800000) v -= 1 << 24;              // signo: extiende a 32 bits
+        if (v & 0x800000) v -= 1 << 24;              // sign: sign-extend to 32 bits
         return float(v) / 8388608.0f;
     }
     if (bits == 32) {
@@ -47,7 +47,7 @@ float decode_sample(const uint8_t* p, uint16_t bits, uint16_t format) {
 
 } // namespace
 
-// ----------------------------- construcción --------------------------
+// ----------------------------- construction --------------------------
 StreamWavSource::StreamWavSource(const std::string& path, std::string& err) {
     file_.open(path, std::ios::binary);
     if (!file_) { err = "no se pudo abrir: " + path; return; }
@@ -69,14 +69,14 @@ StreamWavSource::StreamWavSource(const std::string& path, std::string& err) {
         return;
     }
 
-    // Escaneo tolerante de chunks CON SEEK (solo se leen las cabeceras de
-    // 8 bytes y el cuerpo del fmt; el data NO se toca aquí): mismas reglas
-    // que read_wav — clamp del tamaño al fin real del archivo y avance con
-    // padding a byte par.
+    // Tolerant chunk scan WITH SEEK (only the 8-byte headers and the fmt
+    // body are read; data is NOT touched here): same rules as read_wav —
+    // size clamped to the real end of the file and advance with padding
+    // to an even byte.
     uint64_t pos = 12;
     bool fmt_found = false, data_found = false;
-    uint64_t fmt_size = 0, data_off = 0, data_size = 0;   // data_size: clamp
-    uint64_t data_declared = 0;                            // sin clamp
+    uint64_t fmt_size = 0, data_off = 0, data_size = 0;   // data_size: clamped
+    uint64_t data_declared = 0;                            // not clamped
     std::vector<uint8_t> fmtbuf;
     uint8_t hdr[8];
     while (pos + 8 <= end) {
@@ -96,7 +96,7 @@ StreamWavSource::StreamWavSource(const std::string& path, std::string& err) {
         } else if (std::memcmp(hdr, "data", 4) == 0) {
             data_found = true;
             data_off = body;
-            data_size = csize;            // clamp: truncado => lo que haya
+            data_size = csize;            // clamp: truncated => what's there
             data_declared = size;
         }
         pos = body + csize + (csize & 1);  // padding a byte par
@@ -107,7 +107,7 @@ StreamWavSource::StreamWavSource(const std::string& path, std::string& err) {
         return;
     }
 
-    // Cabecera fmt (mismas comprobaciones y mensajes que read_wav).
+    // fmt header (same checks and messages as read_wav).
     uint16_t audio_format = rd_u16(fmtbuf.data());
     const uint16_t channels = rd_u16(fmtbuf.data() + 2);
     const uint32_t rate = rd_u32(fmtbuf.data() + 4);
@@ -132,8 +132,8 @@ StreamWavSource::StreamWavSource(const std::string& path, std::string& err) {
               ", bits=" + std::to_string(bits) + "). Soportado: PCM16/24/32, float32.";
         return;
     }
-    // El sim entrega mono/estéreo (como FileAudioSource); más canales se
-    // rechazan AQUÍ, con mensaje accionable.
+    // The sim delivers mono/stereo (like FileAudioSource); more channels
+    // are rejected HERE, with an actionable message.
     if (channels > kMaxChannels) {
         err = "el sim acepta 1 o 2 canales (archivo tiene " +
               std::to_string(channels) +
@@ -141,7 +141,7 @@ StreamWavSource::StreamWavSource(const std::string& path, std::string& err) {
         return;
     }
 
-    // Estado de streaming: solo marcos completos (mismo floor que read_wav).
+    // Streaming state: whole frames only (same floor as read_wav).
     frame_bytes_ = size_t(channels) * bytes_per;
     frames_total_ = size_t(data_size / frame_bytes_);
     sample_rate_ = rate;
@@ -152,9 +152,9 @@ StreamWavSource::StreamWavSource(const std::string& path, std::string& err) {
     data_declared_ = data_declared;
     data_size_ = data_size;
     data_remaining_ = uint64_t(frames_total_) * frame_bytes_;
-    truncated_ = data_declared > data_size;    // declaraba más de lo que hay
+    truncated_ = data_declared > data_size;    // declared more than exists
 
-    // Buffer de lectura: una sola reserva, alineada a marcos completos.
+    // Read buffer: single allocation, aligned to whole frames.
     buf_frames_cap_ = std::max<size_t>(1, kStreamChunkBytes / frame_bytes_);
     buf_.resize(buf_frames_cap_ * frame_bytes_);
 
@@ -163,7 +163,7 @@ StreamWavSource::StreamWavSource(const std::string& path, std::string& err) {
     usable_ = true;
 }
 
-// ------------------------------ lectura ------------------------------
+// ------------------------------ reading ------------------------------
 bool StreamWavSource::fill_buffer() {
     if (io_failed_ || data_remaining_ == 0) return false;
     const size_t want = size_t(std::min<uint64_t>(buf_.size(), data_remaining_));
@@ -172,16 +172,16 @@ bool StreamWavSource::fill_buffer() {
     const size_t got = size_t(file_.gcount());
     data_remaining_ -= got;
     buf_pos_ = 0;
-    buf_frames_ = got / frame_bytes_;          // floor: descarta marco cortado
-    if (got < want) io_failed_ = true;         // el disco dio menos de lo pedido
+    buf_frames_ = got / frame_bytes_;          // floor: discards a torn frame
+    if (got < want) io_failed_ = true;         // disk gave fewer bytes than asked
     return buf_frames_ > 0;
 }
 
 bool StreamWavSource::read(Block& b, size_t max_frames) {
     if (!usable_) return false;
     if (frames_done_ >= frames_total_) {
-        // Fin de stream: la única vez que se informa de truncado es aquí
-        // (y solo si el chunk 'data' declaraba más bytes de los reales).
+        // End of stream: truncation is reported only here, and only once
+        // (and only if the 'data' chunk declared more bytes than real).
         if (truncated_ && !trunc_reported_) {
             trunc_reported_ = true;
             err_ = "WAV truncado: el chunk 'data' declara " +
@@ -194,7 +194,7 @@ bool StreamWavSource::read(Block& b, size_t max_frames) {
     }
 
     const size_t n = std::min(max_frames, frames_total_ - frames_done_);
-    b.channels = 2;                            // mono ya plegado a estéreo
+    b.channels = 2;                            // mono already folded to stereo
     size_t done = 0;
     while (done < n) {
         if (buf_pos_ >= buf_frames_ && !fill_buffer()) break;
@@ -204,7 +204,7 @@ bool StreamWavSource::read(Block& b, size_t max_frames) {
         if (channels_ == 1) {
             for (size_t i = 0; i < take; ++i) {
                 b.L[done + i] = decode_sample(p + i * frame_bytes_, bits_, format_);
-                b.R[done + i] = b.L[done + i];             // mono->estéreo
+                b.R[done + i] = b.L[done + i];             // mono->stereo
             }
         } else {
             for (size_t i = 0; i < take; ++i) {
@@ -224,7 +224,7 @@ bool StreamWavSource::read(Block& b, size_t max_frames) {
         err_ = "WAV truncado: la lectura se interrumpió antes de completar "
                "el chunk 'data' (el disco dio menos bytes de los pedidos)";
     }
-    if (done < n) return done > 0;   // parcial entregado, o false si no avanzó
+    if (done < n) return done > 0;   // partial delivered, or false if no progress
     return true;
 }
 

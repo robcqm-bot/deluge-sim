@@ -1,7 +1,7 @@
 // =====================================================================
-// SUITE-CORE / tape_sat.cpp — Saturación de cinta de referencia
-// Zona propia del cortafuegos: solo C++ estándar. Sin allocaciones en
-// process(); sin excepciones; salida siempre finita.
+// SUITE-CORE / tape_sat.cpp — Reference tape saturation
+// Firewall own zone: standard C++ only. No allocations in process();
+// no exceptions; output always finite.
 // =====================================================================
 #include "suite_core/tape_sat.hpp"
 
@@ -11,19 +11,19 @@
 namespace suite_core {
 
 void TapeSatRef::set_sample_rate(double sr) {
-    // Se guarda por uniformidad de interfaz con el resto de la suite.
-    // La curva es MEMORYLESS y estática: no hay coeficientes que
-    // recalcular, fs no altera la transferencia muestra a muestra.
+    // Stored for interface uniformity with the rest of the suite.
+    // The curve is MEMORYLESS and static: there are no coefficients to
+    // recompute; fs does not alter the sample-by-sample transfer.
     sample_rate_ = (sr > 0.0) ? sr : 48000.0;
 }
 
 void TapeSatRef::recompute_constants() {
-    // Constantes del modelo precalculadas: process() no hace pow ni tanh
-    // de parámetros, solo un tanh por muestra (la curva en sí).
+    // Model constants precomputed: process() does no pow and no tanh of
+    // parameters, just one tanh per sample (the curve itself).
     g_lin_    = std::pow(10.0, params_.drive_db / 20.0);
     b_        = (params_.bias_pct / 100.0) * 0.5;
     tanh_b_   = std::tanh(b_);
-    norm_     = 1.0 - tanh_b_ * tanh_b_;      // en [1-tanh(0.5)^2, 1] > 0
+    norm_     = 1.0 - tanh_b_ * tanh_b_;      // in [1-tanh(0.5)^2, 1] > 0
     trim_lin_ = std::pow(10.0, params_.trim_db / 20.0);
 }
 
@@ -39,11 +39,11 @@ void TapeSatRef::set_params(const Params& p) {
 }
 
 double TapeSatRef::curve(double x) const {
-    // Rama positiva en |x| y signo aplicado aparte: la imparidad de tanh
-    // hace esto idéntico a la fórmula documentada por ramas
-    // (tanh(g*x - b) + tanh(b) == -(tanh(g*|x| + b) - tanh(b)) para x<0),
-    // pero garantiza y(-x) == -y(x) BIT-EXACTO en cualquier libm.
-    // En x = 0: tanh(b) - tanh(b) = 0 exacto => y(0) = 0 sin DC.
+    // Positive branch on |x| with the sign applied separately: the
+    // oddness of tanh makes this identical to the documented per-branch
+    // formula (tanh(g*x - b) + tanh(b) == -(tanh(g*|x| + b) - tanh(b)) for x<0),
+    // but guarantees y(-x) == -y(x) BIT-EXACT on any libm.
+    // At x = 0: tanh(b) - tanh(b) = 0 exact => y(0) = 0, no DC.
     const double ax = g_lin_ * std::fabs(x);
     const double yr = std::tanh(ax + b_) - tanh_b_;
     const double y  = (x < 0.0) ? -yr : yr;
@@ -51,7 +51,7 @@ double TapeSatRef::curve(double x) const {
 }
 
 void TapeSatRef::reset() {
-    bad_inputs_ = 0;                          // no hay más estado dinámico
+    bad_inputs_ = 0;                          // there is no other dynamic state
 }
 
 void TapeSatRef::process(float* L, float* R, size_t frames) {

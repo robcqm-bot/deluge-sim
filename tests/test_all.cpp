@@ -1,6 +1,6 @@
 // =====================================================================
-// deluge-sim / test_all.cpp — Batería de verificación (binario simtests)
-// Cada prueba lleva su expectativa MATEMÁTICA documentada. Exit 0 = todo ok.
+// deluge-sim / test_all.cpp — Verification suite (simtests binary)
+// Each test carries its documented MATHEMATICAL expectation. Exit 0 = all ok.
 // =====================================================================
 #include "board_core.hpp"
 #include "deluge_sim/engine.hpp"
@@ -40,7 +40,7 @@ void check(bool ok, const std::string& what) {
     if (!ok) ++g_failures;
 }
 
-// Adaptador blanco de pruebas (mismo patrón que el de main.cpp).
+// Test dummy adapter (same pattern as the one in main.cpp).
 class FetAdapter : public IProcessor {
 public:
     explicit FetAdapter(const Fet76Ref::Params& p) { f_.set_params(p); }
@@ -59,7 +59,7 @@ private:
     Fet76Ref f_;
 };
 
-// Adaptador blanco del óptico (mismo patrón).
+// Opto dummy adapter (same pattern).
 class OptoAdapter : public IProcessor {
 public:
     explicit OptoAdapter(const OptoCompRef::Params& p) { o_.set_params(p); }
@@ -78,7 +78,7 @@ private:
     OptoCompRef o_;
 };
 
-// Adaptador blanco del EQ pasivo (mismo patrón).
+// Passive EQ dummy adapter (same pattern).
 class PassiveEQAdapter : public IProcessor {
 public:
     explicit PassiveEQAdapter(const PassiveEQRef::Params& p) { e_.set_params(p); }
@@ -97,7 +97,7 @@ private:
     PassiveEQRef e_;
 };
 
-// Adaptador blanco de la reverb de placa (mismo patrón).
+// Plate reverb dummy adapter (same pattern).
 class PlateAdapter : public IProcessor {
 public:
     explicit PlateAdapter(const PlateReverbRef::Params& p) { r_.set_params(p); }
@@ -115,7 +115,7 @@ private:
     PlateReverbRef r_;
 };
 
-// Genera un seno estéreo intercalado con pico dado (frecuencia fija 1 kHz).
+// Generates an interleaved stereo sine with the given peak (fixed 1 kHz frequency).
 WavData make_sine(uint32_t sr, size_t frames, double peak, double freq_hz = 1000.0) {
     WavData w;
     w.sample_rate = sr;
@@ -141,7 +141,7 @@ bool run_engine(WavData& in, std::vector<float>& outL, double block = 512) {
         std::cout << "  (engine error: " << err << ")\n";
         return false;
     }
-    // Relee el sumidero reutilizando la ruta de archivo (verifica WAV I/O):
+    // Re-reads the sink reusing the file path (verifies WAV I/O):
     std::string tmp = (std::filesystem::temp_directory_path() /
                        "deluge_sim_test_out.wav").string();
     if (!sink.finalize(tmp, err)) return false;
@@ -152,7 +152,7 @@ bool run_engine(WavData& in, std::vector<float>& outL, double block = 512) {
     return back.frames() == in.frames();
 }
 
-// ------------------------------ pruebas ------------------------------
+// ------------------------------ tests --------------------------------
 void test_wav_roundtrip() {
     std::cout << "[test] wav roundtrip 16 bits\n";
     std::string tmp = (std::filesystem::temp_directory_path() /
@@ -171,7 +171,7 @@ void test_wav_roundtrip() {
 
 void test_fet76_no_gr() {
     std::cout << "[test] fet76: senal a -60 dB con umbral 0 -> GR = 0\n";
-    WavData in = make_sine(48000, 48000, 0.001);            // ~-60 dBFS pico
+    WavData in = make_sine(48000, 48000, 0.001);            // ~-60 dBFS peak
     Fet76Ref f;
     Fet76Ref::Params p;
     p.thresh_db = 0.0;
@@ -211,7 +211,7 @@ void test_fet76_gr_steady() {
         R[i] = in.samples[2 * i + 1];
     }
     f.process(L.data(), R.data(), L.size());
-    double peak_tail = 0.0;                                  // ultimos 0.2 s
+    double peak_tail = 0.0;                                  // last 0.2 s
     for (size_t i = L.size() - 9600; i < L.size(); ++i)
         peak_tail = std::max(peak_tail, double(std::fabs(L[i])));
     check(peak_tail > 0.32 && peak_tail < 0.43,
@@ -223,8 +223,8 @@ void test_fet76_gr_steady() {
 void test_fet76_release() {
     std::cout << "[test] fet76: release devuelve GR a ~0 tras 3 tau\n";
     const uint32_t sr = 48000;
-    const size_t sig = size_t(sr) / 2;                       // 0.5 s de senal
-    const size_t sil = size_t(sr) * 3 / 10;                  // 0.3 s de silencio
+    const size_t sig = size_t(sr) / 2;                       // 0.5 s of signal
+    const size_t sil = size_t(sr) * 3 / 10;                  // 0.3 s of silence
     WavData in = make_sine(sr, sig + sil, 0.5);
     for (size_t i = sig; i < sig + sil; ++i) {
         in.samples[2 * i] = 0.0f;
@@ -299,7 +299,7 @@ void test_fet76_mono() {
 
 void test_engine_end_to_end() {
     std::cout << "[test] engine extremo a extremo (bloque parcial 1000/512)\n";
-    WavData in = make_sine(48000, 1000, 0.5);                // < 2 bloques
+    WavData in = make_sine(48000, 1000, 0.5);                // < 2 blocks
     std::vector<float> outL;
     check(run_engine(in, outL), "corrida completa y relectura OK");
     check(outL.size() == 1000, "marcos de salida == 1000 (parcial manejado)");
@@ -308,10 +308,10 @@ void test_engine_end_to_end() {
     check(finite, "salida del engine finita");
 }
 
-// --------------------- pruebas board (fase 2, v0.2) ------------------
+// --------------------- board tests (phase 2, v0.2) -------------------
 
-// Procesador blanco: ganancia exacta x0.5 (multiplicación por potencia
-// de 2 => exacta en IEEE-754, sin redondeo).
+// Test processor: exact x0.5 gain (multiplying by a power
+// of 2 => exact in IEEE-754, no rounding).
 class GainHalf : public IProcessor {
 public:
     const char* name() const override { return "gain_half_test"; }
@@ -331,11 +331,11 @@ void test_board_sdcard() {
     std::error_code ec;
     std::string dir = (fs::temp_directory_path() /
                        "deluge_sim_test_sd").string();
-    fs::remove_all(dir, ec);                                // limpia corrida previa
+    fs::remove_all(dir, ec);                                // cleans up the previous run
     fs::create_directories(dir);
     std::string err;
-    // Archivos de prueba: 2 wav (nombres invertidos para probar el orden),
-    // 1 no-wav que NO debe contar y 1 subdirectorio que tampoco.
+    // Test files: 2 wav (names swapped to test the ordering),
+    // 1 non-wav that must NOT count and 1 subdirectory that doesn't either.
     { std::ofstream f(dir + "/bbb.wav"); f << 'x'; }
     { std::ofstream f(dir + "/aaa.wav"); f << 'x'; }
     { std::ofstream f(dir + "/ccc.txt"); f << 'x'; }
@@ -391,9 +391,9 @@ void test_board_clock() {
 
 void test_board_pump_cadence() {
     std::cout << "[test] pump: cadencia fija 1000 marcos @128 (7x128 + 104 + fin)\n";
-    WavData in = make_sine(48000, 1000, 0.5);               // 1000 marcos
+    WavData in = make_sine(48000, 1000, 0.5);               // 1000 frames
     deluge_sim::board::BoardClock c;
-    deluge_sim::board::BoardPump pump(c);                   // sin cadena: passthrough
+    deluge_sim::board::BoardPump pump(c);                   // no chain: passthrough
     std::string err;
     check(pump.load_song(in, err), "carga de canción");
     check(!pump.is_playing(), "cargada pero parada");
@@ -430,7 +430,7 @@ void test_board_pump_chain_bypass() {
     for (;;) {
         size_t n = pump.pump(out.data(), 128);
         if (n == 0) break;
-        // x0.5 exacto: la salida debe ser EXACTAMENTE la mitad bit a bit.
+        // Exact x0.5: the output must be EXACTLY half, bit for bit.
         for (size_t i = 0; i < n; ++i) {
             if (out[2 * i] != in.samples[2 * (i + got)] * 0.5f) { got = size_t(-1); break; }
             if (out[2 * i + 1] != in.samples[2 * (i + got) + 1] * 0.5f) { got = size_t(-1); break; }
@@ -442,7 +442,7 @@ void test_board_pump_chain_bypass() {
     check(got == 256, "cadena x0.5 aplicada exactamente a los 256 marcos");
     check(calls == 2, "2 bloques (128+128) en 256 marcos");
 
-    // Bypass: sin cadena, la salida debe ser EXACTAMENTE la fuente.
+    // Bypass: no chain, the output must be EXACTLY the source.
     WavData in2 = make_sine(48000, 128, 0.5);
     deluge_sim::board::BoardPump pump2(c);
     pump2.add_processor(std::make_unique<GainHalf>());
@@ -454,7 +454,7 @@ void test_board_pump_chain_bypass() {
     for (size_t i = 0; i < 256 && exact; ++i) exact = (out2[i] == in2.samples[i]);
     check(exact, "bypass: salida == fuente bit a bit");
 
-    // Guardia de entrada: NaN en la canción -> sustituido y contado.
+    // Input guard: NaN in the song -> replaced and counted.
     WavData in3 = make_sine(48000, 128, 0.5);
     in3.samples[10] = std::numeric_limits<float>::quiet_NaN();
     deluge_sim::board::BoardPump pump3(c);
@@ -467,17 +467,17 @@ void test_board_pump_chain_bypass() {
     check(finite && pump3.stats().nonfinite_input_fixed == 1,
           "NaN sustituido por 0 y contado (== 1)");
 
-    // Sample rate incompatible: rechazo accionable.
+    // Incompatible sample rate: actionable rejection.
     WavData in4 = make_sine(44100, 128, 0.5);
     deluge_sim::board::BoardPump pump4(c);
     check(!pump4.load_song(in4, err) && err.find("Hz") != std::string::npos,
           "44100 Hz vs reloj 48000 -> rechazo con mensaje");
 }
 
-// ---------------- pruebas opto_comp (referencia, v0.3) ---------------
+// ---------------- opto_comp tests (reference, v0.3) ------------------
 
-// Estabiliza el opto con una entrada DC (el detector converge EXACTO a
-// |x|) y devuelve la GR estacionaria y la salida final.
+// Settles the opto with a DC input (the detector converges EXACTLY to
+// |x|) and returns the steady GR and the final output.
 struct OptoSteady {
     double gr_db = 0.0;
     double out = 0.0;
@@ -497,13 +497,13 @@ OptoSteady opto_steady_dc(double x, const OptoCompRef::Params& p) {
 
 void test_opto_gain_law_dc() {
     std::cout << "[test] opto: ley de ganancia EXACTA con DC (rodilla + lineal)\n";
-    // Ley documentada (s = 1-1/R, w = knee):
+    // Documented law (s = 1-1/R, w = knee):
     //   e<=0: 0 | 0<e<=w: s*e^2/(2w) | e>w: s*(e-w/2)
     OptoCompRef::Params p;                 // thresh=-12, ratio=4, knee=6
     p.thresh_db = -12.0; p.ratio = 4.0; p.knee_db = 6.0;
     const double s = 0.75, w = 6.0, th = -12.0;
 
-    // Caso A: en rodilla (e = 5.979 dB < w)
+    // Case A: at the knee (e = 5.979 dB < w)
     {
         const double x = 0.5;
         const double e = 20.0 * std::log10(x) - th;
@@ -515,8 +515,8 @@ void test_opto_gain_law_dc() {
         check(std::fabs(m.out - x * std::pow(10.0, -gr_expect / 20.0)) < 1e-3,
               "salida == x*10^(-GR/20)");
     }
-    // Caso B: EXACTAMENTE en la juntura rodilla/lineal (e = w): ambas ramas
-    //         dan lo mismo (continuidad C1).
+    // Case B: EXACTLY at the knee/linear junction (e = w): both branches
+    //         give the same value (C1 continuity).
     {
         const double x = std::pow(10.0, (th + w) / 20.0);
         const double gr_expect = s * (w - 0.5 * w);
@@ -525,7 +525,7 @@ void test_opto_gain_law_dc() {
               "GR en la juntura e=knee == s*knee/2 (esperada " +
               std::to_string(gr_expect) + ")");
     }
-    // Caso C: por encima de la rodilla (pendiente s = 1 - 1/R).
+    // Case C: above the knee (slope s = 1 - 1/R).
     {
         const double x = 0.7;
         const double e = 20.0 * std::log10(x) - th;
@@ -535,7 +535,7 @@ void test_opto_gain_law_dc() {
               "GR sobre rodilla == s*(e-w/2) (esperada " +
               std::to_string(gr_expect) + ")");
     }
-    // Caso D: bajo el umbral -> sin reduccion (salida == entrada).
+    // Case D: below threshold -> no reduction (output == input).
     {
         const OptoSteady m = opto_steady_dc(0.1, p);
         check(std::fabs(m.gr_db) < 1e-9 && std::fabs(m.out - 0.1) < 1e-6,
@@ -545,7 +545,7 @@ void test_opto_gain_law_dc() {
 
 void test_opto_attack_ballistics() {
     std::cout << "[test] opto: attack ~2 tau hasta el 63% de la GR final\n";
-    // Con ley cuadratica en rodilla, el 63.2% de la GR final ocurre en
+    // With the quadratic law in the knee, 63.2% of the final GR occurs at
     // f_env = 0.868 => t = -tau*ln(1-0.868) ~= 2.02 tau (tau = attack_s).
     OptoCompRef o;
     OptoCompRef::Params p;
@@ -553,12 +553,12 @@ void test_opto_attack_ballistics() {
     o.set_params(p);
     o.set_sample_rate(48000);
     o.prepare();
-    const double gr_final = 2.2346;             // de la ley (caso A anterior)
+    const double gr_final = 2.2346;             // from the law (case A above)
     size_t t63 = 0, onset = 0;
     float v = 0.0f;
     std::vector<float> one(1);
     for (size_t i = 0; i < 24000; ++i) {        // 0.5 s
-        v = (i < 9600) ? 0.0f : 0.5f;           // silencio 0.2 s, luego DC
+        v = (i < 9600) ? 0.0f : 0.5f;           // 0.2 s of silence, then DC
         if (onset == 0 && i >= 9600) onset = i;
         one[0] = v;
         o.process(one.data(), nullptr, 1);
@@ -576,8 +576,8 @@ void test_opto_attack_ballistics() {
 
 void test_opto_release_program_dependent() {
     std::cout << "[test] opto: release program-dependent (GR profunda despeja mas lento)\n";
-    // tau_release interpola de release_slow (GR->0) a release_fast
-    // (|GR| >= gr_span_db). La cola larga es la firma del opto.
+    // tau_release interpolates from release_slow (GR->0) to release_fast
+    // (|GR| >= gr_span_db). The long tail is the opto's signature.
     auto recovery_ms = [&](double x, double gr_at_release) {
         OptoCompRef o;
         OptoCompRef::Params p;
@@ -586,12 +586,12 @@ void test_opto_release_program_dependent() {
         o.set_params(p);
         o.set_sample_rate(48000);
         o.prepare();
-        std::vector<float> loud(14400, float(x));           // 0.3 s fuertes
+        std::vector<float> loud(14400, float(x));           // 0.3 s loud
         o.process(loud.data(), nullptr, loud.size());
         if (std::fabs(o.current_gr_db() + gr_at_release) > 0.15 * gr_at_release) {
-            return -1.0;                                    // GR no convergio
+            return -1.0;                                    // GR did not converge
         }
-        std::vector<float> quiet(96000, 0.001f);            // 2 s de despeje
+        std::vector<float> quiet(96000, 0.001f);            // 2 s of recovery
         size_t t = 0;
         std::vector<float> one(1);
         for (size_t i = 0; i < quiet.size(); ++i) {
@@ -601,11 +601,11 @@ void test_opto_release_program_dependent() {
         }
         return double(t) / 48.0;
     };
-    // GR profunda: x=0.9 -> e=11.08 dB -> GR = s*(e-w/2) = 6.06 dB.
-    // GR somera:  x=0.5 -> e=5.98 dB -> GR = 2.23 dB (rodilla).
-    // tau efectivo inicial con depth=0.606: interpolando coeficientes
-    // (1/tau) da ~121 ms; crece hacia 600 ms al despejar -> el tiempo
-    // medido a -1 dB queda en ~150-200 ms, muy por encima del tau fast.
+    // Deep GR:    x=0.9 -> e=11.08 dB -> GR = s*(e-w/2) = 6.06 dB.
+    // Shallow GR: x=0.5 -> e=5.98 dB -> GR = 2.23 dB (knee).
+    // Initial effective tau with depth=0.606: interpolating coefficients
+    // (1/tau) gives ~121 ms; it grows toward 600 ms as it recovers -> the
+    // time measured at -1 dB lands at ~150-200 ms, well above the fast tau.
     const double deep = recovery_ms(0.9, 6.0636);
     const double shallow = recovery_ms(0.5, 2.2346);
     check(deep > 0 && deep > 100.0 && deep < 400.0,
@@ -655,12 +655,12 @@ void test_engine_chain_fet_opto() {
     WavData in = make_sine(48000, 48000, 0.5);
     Engine engine(48000.0, 512);
     auto fet = std::make_unique<FetAdapter>(Fet76Ref::Params{});    // thresh -18
-    OptoCompRef::Params pop;                     // thresh -12 por defecto
-    pop.thresh_db = -24.0;                       // el fet76 ya aplasta la señal
-    auto opto = std::make_unique<OptoAdapter>(pop);   // (el opto ve ~-14 dB)
-    FetAdapter* fet_p = fet.get();               // telemetría tras la corrida
+    OptoCompRef::Params pop;                     // default thresh -12
+    pop.thresh_db = -24.0;                       // fet76 already crushes the signal
+    auto opto = std::make_unique<OptoAdapter>(pop);   // (the opto sees ~-14 dB)
+    FetAdapter* fet_p = fet.get();               // telemetry after the run
     OptoAdapter* opto_p = opto.get();
-    engine.add_processor(std::move(fet));        // orden de inserción: fet -> opto
+    engine.add_processor(std::move(fet));        // insertion order: fet -> opto
     engine.add_processor(std::move(opto));
     FileAudioSource src(in);
     WavAudioSink sink(48000, 2);
@@ -669,21 +669,21 @@ void test_engine_chain_fet_opto() {
     check(engine.run(src, sink, rep, err), "corrida de la cadena completa");
     check(rep.frames_rendered == 48000, "marcos preservados (48000)");
     check(engine.processor_count() == 2, "cadena con 2 procesadores");
-    // ambos compresores deben haber actuado (telemetria < 0 dB):
+    // both compressors must have acted (telemetry < 0 dB):
     check(fet_p->ref().current_gr_db() < -0.5 && opto_p->ref().current_gr_db() < -0.5,
           "GR de ambos eslabones activa (fet " +
           std::to_string(fet_p->ref().current_gr_db()) + ", opto " +
           std::to_string(opto_p->ref().current_gr_db()) + ")");
-    // salida finita y comprimida: pico <= pico de entrada
+    // finite and compressed output: peak <= input peak
     check(sink.finalize((std::filesystem::temp_directory_path() /
                          "deluge_sim_test_chain.wav").string(), err),
           "sumidero escribe WAV de la cadena");
 }
 
-// ---------------- pruebas passive_eq (referencia, v0.4) --------------
+// ---------------- passive_eq tests (reference, v0.4) -----------------
 
-// Ganancia estacionaria (dB) a 'freq': senoidal de pico 0.5, 24 ciclos,
-// se mide el pico del último 25% (transitorio ya extinguido).
+// Steady-state gain (dB) at 'freq': 0.5-peak sine, 24 cycles,
+// measures the peak of the last 25% (transient already extinguished).
 double eq_steady_gain_db(const PassiveEQRef::Params& p, double freq) {
     PassiveEQRef e;
     e.set_params(p);
@@ -745,7 +745,7 @@ void test_eq_boost_response_exact() {
 void test_eq_cut_response_exact() {
     std::cout << "[test] eq: recorte exacto en 2.5 f0 y mordida en f0\n";
     PassiveEQRef::Params p;
-    p.cut_db = 9.0;                         // dip en 2.5*60 = 150 Hz
+    p.cut_db = 9.0;                         // dip at 2.5*60 = 150 Hz
     const double gdip = eq_steady_gain_db(p, 150.0);
     check(std::fabs(gdip + 9.0) < 0.05,
           "en 2.5*f0 el recorte es EXACTAMENTE -cut_db (medido " +
@@ -771,8 +771,8 @@ void test_eq_trick_curve() {
     PassiveEQRef::Params pboost_only;
     pboost_only.boost_db = 8.0;
 
-    const double g_f0 = eq_steady_gain_db(p, 60.0);       // pico neto
-    const double g_dip = eq_steady_gain_db(p, 150.0);     // dip sobre el pico
+    const double g_f0 = eq_steady_gain_db(p, 60.0);       // net peak
+    const double g_dip = eq_steady_gain_db(p, 150.0);     // dip above the peak
     const double g_hi = eq_steady_gain_db(p, 750.0);      // 12.5x f0
     const double g_boost_only = eq_steady_gain_db(pboost_only, 60.0);
 
@@ -828,14 +828,14 @@ void test_eq_nonfinite_mono() {
 
 void test_engine_chain_eq() {
     std::cout << "[test] engine cadena [fet76, eq]: boost que sobrevive la cadena\n";
-    WavData in = make_sine(48000, 48000, 0.5);   // seno a 1 kHz
+    WavData in = make_sine(48000, 48000, 0.5);   // 1 kHz sine
     Engine engine(48000.0, 512);
     auto fet = std::make_unique<FetAdapter>(Fet76Ref::Params{});  // thresh -18
     PassiveEQRef::Params peq;
-    peq.freq_hz = 1000.0;                        // refuerzo justo en la señal
+    peq.freq_hz = 1000.0;                        // boost right on the signal
     peq.boost_db = 6.0;
     auto eq = std::make_unique<PassiveEQAdapter>(peq);
-    engine.add_processor(std::move(fet));        // orden de inserción: fet -> eq
+    engine.add_processor(std::move(fet));        // insertion order: fet -> eq
     engine.add_processor(std::move(eq));
     FileAudioSource src(in);
     WavAudioSink sink(48000, 2);
@@ -850,7 +850,7 @@ void test_engine_chain_eq() {
     check(read_wav(tmp, back, err) && back.frames() == 48000, "relectura OK");
     double peak = 0.0;
     for (float v : back.samples) peak = std::max(peak, double(std::fabs(v)));
-    // fet76 solo dejaría ~0.38; el +6 dB del EQ sobrevive: pico ~0.75
+    // fet76 alone would leave ~0.38; the EQ's +6 dB survives: peak ~0.75
     check(peak > 0.6 && peak < 0.9,
           "boost del EQ sobrevive la cadena (pico medido " +
           std::to_string(peak) + ")");
@@ -859,10 +859,10 @@ void test_engine_chain_eq() {
     check(finite, "salida de la cadena finita");
 }
 
-// ---------------- pruebas plate_reverb (referencia, v0.5) -------------
+// ---------------- plate_reverb tests (reference, v0.5) ---------------
 
-// RT60 medido por regresión lineal sobre la envolvente de energía (bloques
-// de 50 ms) en la banda relativa [lo_db, hi_db] bajo el bloque máximo.
+// RT60 measured by linear regression over the energy envelope (50 ms
+// blocks) in the relative band [lo_db, hi_db] below the maximum block.
 double plate_measure_rt60(const PlateReverbRef::Params& p, double lo_db,
                           double hi_db, double seconds = 10.0) {
     PlateReverbRef r;
@@ -888,12 +888,12 @@ double plate_measure_rt60(const PlateReverbRef::Params& p, double lo_db,
     }
     for (size_t k = 0; k < raw.size(); ++k) {
         if (raw[k] <= max_db - hi_db && raw[k] >= max_db - lo_db) {
-            t.push_back(double(k) * 0.05 + 0.025);       // centro del bloque
+            t.push_back(double(k) * 0.05 + 0.025);       // block center
             db.push_back(raw[k]);
         }
     }
-    if (t.size() < 4) return -1.0;                       // banda sin datos
-    // regresión lineal db = a + m·t
+    if (t.size() < 4) return -1.0;                       // band without data
+    // linear regression db = a + m·t
     double st = 0, sd = 0, stt = 0, sdt = 0;
     for (size_t k = 0; k < t.size(); ++k) {
         st += t[k]; sd += db[k];
@@ -919,7 +919,7 @@ void test_plate_rt60() {
 void test_plate_damping_hf() {
     std::cout << "[test] plate: damping — la cola a 6 kHz decae más rápido "
                  "que a 200 Hz\n";
-    // fc(damp 50%) = 4 kHz: |H| a 6 kHz ≈ 0.57 por vuelta (-4.9 dB/67 ms)
+    // fc(damp 50%) = 4 kHz: |H| at 6 kHz ≈ 0.57 per pass (-4.9 dB/67 ms)
     // => RT60_hf ~ 0.6 s vs RT60_lf ~ decay_s.
     auto burst_rt60 = [&](double freq) {
         PlateReverbRef r;
@@ -939,7 +939,7 @@ void test_plate_damping_hf() {
             L[i] = R[i] = float(0.5 * std::sin(2.0 * 3.14159265358979323846 *
                                                freq * double(i) / double(sr)));
         r.process(L.data(), R.data(), L.size());
-        // envolvente RMS por bloques de 50 ms desde el fin del burst
+        // RMS envelope in 50 ms blocks starting at the end of the burst
         const size_t blk = 2400;
         std::vector<double> t, db;
         double max_db = -1e9;
@@ -979,7 +979,7 @@ void test_plate_damping_hf() {
 void test_plate_dry_and_predelay() {
     std::cout << "[test] plate: bypass bit-exacto (mix 0) y silencio exacto "
                  "antes de predelay+colas (wet 100)\n";
-    // mix 0: salida == entrada bit a bit
+    // mix 0: output == input bit for bit
     PlateReverbRef r;
     PlateReverbRef::Params p;
     p.mix_pct = 0.0;
@@ -999,7 +999,7 @@ void test_plate_dry_and_predelay() {
     for (size_t i = 0; i < L.size(); ++i)
         if (L[i] != Lin[i] || R[i] != Rin[i]) { exact = false; break; }
     check(exact, "mix 0%: salida == entrada bit a bit");
-    // wet 100 + predelay 20 ms: los primeros 2000 muestreos son 0.0 exactos
+    // wet 100 + predelay 20 ms: the first 2000 samples are exactly 0.0
     PlateReverbRef w;
     PlateReverbRef::Params pw;
     pw.mix_pct = 100.0;
@@ -1008,7 +1008,7 @@ void test_plate_dry_and_predelay() {
     w.set_sample_rate(48000);
     w.prepare();
     std::vector<float> W(4800, 0.0f), WR(4800, 0.0f);
-    W[0] = 1.0f; WR[0] = 1.0f;                            // impulso
+    W[0] = 1.0f; WR[0] = 1.0f;                            // impulse
     w.process(W.data(), WR.data(), W.size());
     bool silent = true;
     for (size_t i = 0; i < 2000; ++i)
@@ -1054,7 +1054,7 @@ void test_plate_determinism_mod() {
 
 void test_plate_stability_nonfinite_mono() {
     std::cout << "[test] plate: estabilidad con ruido, NaN/Inf y camino mono\n";
-    // ruido blanco 2 s a plena mezcla: finito y acotado
+    // 2 s white noise at full wet: finite and bounded
     PlateReverbRef r;
     PlateReverbRef::Params p;
     p.mix_pct = 100.0;
@@ -1117,7 +1117,7 @@ void test_engine_chain_plate() {
     peq.boost_db = 6.0;
     auto eq = std::make_unique<PassiveEQAdapter>(peq);
     auto plate = std::make_unique<PlateAdapter>(PlateReverbRef::Params{});
-    engine.add_processor(std::move(eq));         // orden de inserción: eq -> plate
+    engine.add_processor(std::move(eq));         // insertion order: eq -> plate
     engine.add_processor(std::move(plate));
     FileAudioSource src(in);
     WavAudioSink sink(48000, 2);
@@ -1135,9 +1135,9 @@ void test_engine_chain_plate() {
     check(finite, "salida de la cadena finita");
 }
 
-// ------------- módulos v0.6 (trabajo en paralelo, integrados) --------
-// Cada .inc se incluye verbatim DENTRO de este namespace anónimo: usa
-// check()/make_sine() de arriba y NO trae #include propios.
+// ------------- v0.6 modules (parallel work, integrated) --------------
+// Each .inc is included verbatim INSIDE this anonymous namespace: it uses
+// check()/make_sine() from above and brings NO #include of its own.
 #include "test_tape.inc"
 #include "test_stream.inc"
 #include "test_preset.inc"

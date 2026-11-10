@@ -15,57 +15,57 @@
 
 namespace deluge_sim {
 
-// --- Constantes del simulador (v0.1: harness offline 48k estéreo) ---
+// --- Simulator constants (v0.1: offline 48k stereo harness) ---
 constexpr double kDefaultSampleRate = 48000.0;
-constexpr size_t kDefaultMaxBlock = 512;   // marcos por bloque de render
-constexpr size_t kMaxChannels = 2;         // v0.1: mono o estéreo
+constexpr size_t kDefaultMaxBlock = 512;   // frames per render block
+constexpr size_t kMaxChannels = 2;         // v0.1: mono or stereo
 
-// --- Bloque de audio (planar: canal L y canal R separados) ---
-// La memoria la posee el Engine; los procesadores NO la realocan.
+// --- Audio block (planar: L and R channels kept separate) ---
+// Memory is owned by the Engine; processors must NOT reallocate it.
 struct Block {
-    float* L = nullptr;        // muestras canal izquierdo
-    float* R = nullptr;        // muestras canal derecho (== L en mono)
-    size_t frames = 0;         // marcos válidos en este bloque
-    size_t channels = 2;       // 1 = mono (R alias de L), 2 = estéreo
+    float* L = nullptr;        // left channel samples
+    float* R = nullptr;        // right channel samples (== L in mono)
+    size_t frames = 0;         // valid frames in this block
+    size_t channels = 2;       // 1 = mono (R aliases L), 2 = stereo
 };
 
-// --- Contexto de preparación (fijo tras prepare(); inmutable en render) ---
+// --- Preparation context (fixed after prepare(); immutable during render) ---
 struct ProcessContext {
     double sample_rate = kDefaultSampleRate;
     size_t max_block = kDefaultMaxBlock;
     size_t channels = kMaxChannels;
 };
 
-// --- Contrato de procesador (Strategy) ---
-// Contrato: process() no debe reservar memoria, no debe lanzar, y debe
-// tratar entradas no finitas internamente (ver suite_core/fet76_ref).
+// --- Processor contract (Strategy) ---
+// Contract: process() must not allocate memory, must not throw, and must
+// handle non-finite inputs internally (see suite_core/fet76_ref).
 class IProcessor {
 public:
     virtual ~IProcessor() = default;
 
-    // Nombre corto estable (reportes, presets, logs).
+    // Stable short name (reports, presets, logs).
     virtual const char* name() const = 0;
 
-    // Llamado una vez antes del render. ctx queda fijo para toda la run.
+    // Called once before rendering. ctx stays fixed for the whole run.
     virtual void prepare(const ProcessContext& ctx) = 0;
 
-    // Procesa el bloque in-place. frames <= ctx.max_block garantizado.
+    // Processes the block in-place. frames <= ctx.max_block guaranteed.
     virtual void process(Block& b) = 0;
 
-    // Vuelve al estado de arranque (sin tocar parámetros).
+    // Returns to the startup state (parameters untouched).
     virtual void reset() = 0;
 };
 
 using ProcessorPtr = std::unique_ptr<IProcessor>;
 
-// --- Reporte de una corrida de render ---
+// --- Report for one render run ---
 struct RunReport {
     size_t frames_rendered = 0;
     size_t blocks_rendered = 0;
-    size_t nonfinite_input_fixed = 0;   // muestras no finitas sustituidas por 0
-    double wall_seconds = 0.0;          // tiempo de reloj del render
+    size_t nonfinite_input_fixed = 0;   // non-finite samples replaced with 0
+    double wall_seconds = 0.0;          // wall-clock render time
     double realtime_factor = 0.0;       // audio_seconds / wall_seconds
-    std::string warning;                // vacío = sin avisos
+    std::string warning;                // empty = no warnings
 };
 
 } // namespace deluge_sim

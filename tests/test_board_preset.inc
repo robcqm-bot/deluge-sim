@@ -1,7 +1,7 @@
 // =====================================================================
-// test_board_preset.inc — SD con presets + fábrica de fx + cadena en el
-// pump (v0.7). Incluido VERBATIM dentro del namespace anónimo de
-// test_all.cpp: usa check()/make_sine(); SIN #include, SIN main().
+// test_board_preset.inc — SD with presets + fx factory + chain in the
+// pump (v0.7). Included VERBATIM inside the anonymous namespace of
+// test_all.cpp: uses check()/make_sine(); NO #include, NO main().
 // =====================================================================
 
 void test_sdcard_presets() {
@@ -50,8 +50,8 @@ void test_fx_factory() {
 void test_preset_chain_in_pump() {
     std::cout << "[test] pump con cadena construida desde un preset (factory)\n";
     using namespace deluge_sim;
-    // Preset: tape -> eq (orden de inserción), con claves prefijadas como
-    // las deja el board al cargar un JSON de la SD.
+    // Preset: tape -> eq (insertion order), with prefixed keys as
+    // the board leaves them when loading a JSON from the SD.
     ChainPreset pr;
     pr.version = 1;
     pr.chain = {"tape", "eq"};

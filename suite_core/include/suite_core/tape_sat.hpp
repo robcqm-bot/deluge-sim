@@ -1,42 +1,42 @@
 // =====================================================================
-// SUITE-CORE / tape_sat.hpp — ZONA PROPIA (cortafuegos GPL)
+// SUITE-CORE / tape_sat.hpp — OWN ZONE (GPL firewall)
 // =====================================================================
-// REGLA DEL CORTAFUEGOS: este módulo NO incluye ningún header de
-// deluge_sim ni del firmware Deluge. Solo C++ estándar + buffers crudos.
-// Interfaz: punteros float planar + contexto mínimo. Es lo único que
-// viaja a otro destino (M7, Teensy, VST) sin contaminación.
+// FIREWALL RULE: this module does NOT include any header from
+// deluge_sim or the Deluge firmware. Standard C++ only + raw buffers.
+// Interface: planar float pointers + minimal context. This is the only
+// thing that travels to another target (M7, Teensy, VST) uncontaminated.
 //
-// TapeSatRef: saturación de cinta estilo inserto de canal de referencia
-// (curva tanh con bias de cinta, punto de operación desplazado por
-// signo). Diseño genérico — NO es todavía un port de producto alguno.
+// TapeSatRef: reference tape saturation, channel-insert style (tanh
+// curve with tape bias, operating point shifted by sign). Generic
+// design — NOT yet a port of any product.
 //
-// Modelo documentado (verificado por tests con expectativa exacta):
+// Documented model (verified by tests with exact expectation):
 //   g    = 10^(drive_db/20)
 //   b    = (bias_pct/100) * 0.5
-//   norm = 1 - tanh(b)^2          (normaliza la ganancia small-signal)
-//   Para x >= 0: y_raw = tanh(g*x + b) - tanh(b)
-//   Para x <  0: y_raw = tanh(g*x - b) + tanh(b)
-//        (bias por signo: rodillas asimétricas arriba/abajo, pero como
-//         tanh es impar la función global es IMPAR exacta.)
-//   y = y_raw / norm * trim_lin   con trim_lin = 10^(trim_db/20)
+//   norm = 1 - tanh(b)^2          (normalizes the small-signal gain)
+//   For x >= 0: y_raw = tanh(g*x + b) - tanh(b)
+//   For x <  0: y_raw = tanh(g*x - b) + tanh(b)
+//        (bias by sign: asymmetric knees above/below, but since tanh is
+//         odd the overall function is exactly ODD.)
+//   y = y_raw / norm * trim_lin   with trim_lin = 10^(trim_db/20)
 //
-//   Propiedades clave:
-//     - y(0) = 0 exacto (sin DC).
-//     - y(-x) == -y(x) exacto => sin armónicos pares.
-//     - Ganancia small-signal == g exacta: la pendiente en 0 de ambas
-//       ramas es g*(1 - tanh(b)^2)/norm = g.
-//     - Acotada: |y| <= (1 - tanh(b))/norm * trim_lin < trim_lin/norm.
+//   Key properties:
+//     - y(0) = 0 exact (no DC).
+//     - y(-x) == -y(x) exact => no even harmonics.
+//     - Small-signal gain == g exactly: the slope at 0 of both branches
+//       is g*(1 - tanh(b)^2)/norm = g.
+//     - Bounded: |y| <= (1 - tanh(b))/norm * trim_lin < trim_lin/norm.
 //
-//   El modelo es MEMORYLESS (curva estática aplicada muestra a muestra):
-//   no hay estado dinámico ni dependencia de fs. set_sample_rate se
-//   guarda únicamente para mantener la interfaz uniforme con el resto
-//   de la suite (la curva no cambia con la frecuencia de muestreo).
+//   The model is MEMORYLESS (static curve applied sample by sample):
+//   no dynamic state, no fs dependence. set_sample_rate is stored only
+//   to keep the interface uniform with the rest of the suite (the curve
+//   does not change with the sampling rate).
 //
-//   Implementación: la rama x < 0 se aplica como -rama(|x|) usando la
-//   imparidad de tanh, de modo que la simetría y(-x) == -y(x) sea
-//   bit-exacto con independencia del libm de la plataforma.
+//   Implementation: the x < 0 branch is applied as -branch(|x|) using
+//   the oddness of tanh, so the symmetry y(-x) == -y(x) is bit-exact
+//   regardless of the platform libm.
 //
-//   Guardia no finita: NaN/Inf -> 0 y contador (patrón de opto_comp).
+//   Non-finite guard: NaN/Inf -> 0 and counter (opto_comp pattern).
 // =====================================================================
 #pragma once
 #include <cstddef>
@@ -47,36 +47,36 @@ namespace suite_core {
 class TapeSatRef {
 public:
     struct Params {
-        double drive_db = 6.0;    // 0..24 (saturación hacia tanh)
-        double bias_pct = 0.0;    // 0..100 (bias de cinta: rodillas asimétricas)
-        double trim_db  = 0.0;    // -24..24 (nivel de salida)
+        double drive_db = 6.0;    // 0..24 (saturation into tanh)
+        double bias_pct = 0.0;    // 0..100 (tape bias: asymmetric knees)
+        double trim_db  = 0.0;    // -24..24 (output level)
     };
 
-    void set_sample_rate(double sr);          // se guarda; la curva no depende de fs
-    void prepare();                           // reset (no hay estado dinámico)
-    void set_params(const Params& p);         // sujeta a rangos (clamp)
+    void set_sample_rate(double sr);          // stored; the curve does not depend on fs
+    void prepare();                           // reset (no dynamic state)
+    void set_params(const Params& p);         // clamps to valid ranges
     const Params& params() const { return params_; }
 
-    // Curva EXACTA del modelo para una muestra (LA expectativa matemática
-    // que los tests verifican y la UI puede dibujar).
+    // EXACT model curve for one sample (THE mathematical expectation
+    // the tests verify and the UI can draw).
     double curve(double x) const;
 
-    // Procesa in-place. R == nullptr => camino mono (usa solo L).
-    // Garantías: sin allocaciones, sin excepciones, salida finita.
+    // Processes in-place. R == nullptr => mono path (uses L only).
+    // Guarantees: no allocations, no exceptions, finite output.
     void process(float* L, float* R, size_t frames);
 
-    void reset();                             // estado a arranque (contador a 0)
+    void reset();                             // state back to startup (counter to 0)
 
-    // Telemetría (para tests y UI): entradas no finitas sustituidas por 0.
+    // Telemetry (for tests and UI): non-finite inputs replaced by 0.
     uint64_t bad_input_count() const { return bad_inputs_; }
 
 private:
     void recompute_constants();
 
     Params params_{};
-    double sample_rate_ = 48000.0;            // solo interfaz uniforme (curva estática)
+    double sample_rate_ = 48000.0;            // uniform interface only (static curve)
     double g_lin_ = 1.0;                      // 10^(drive_db/20)
-    double b_ = 0.0;                          // bias lineal (0..0.5)
+    double b_ = 0.0;                          // linear bias (0..0.5)
     double tanh_b_ = 0.0;                     // tanh(b)
     double norm_ = 1.0;                       // 1 - tanh(b)^2
     double trim_lin_ = 1.0;                   // 10^(trim_db/20)

@@ -1,23 +1,24 @@
 // =====================================================================
-// deluge-sim / test_preset.inc — Pruebas de import/export de presets
-// CONTRATO: se incluye VERBATIM dentro del namespace anónimo de
-// tests/test_all.cpp, después de check() y make_sine(...). Sin #include,
-// sin main() y sin check() propio: solo test_preset_xxx() y helpers
-// file-static. Única cabecera que el integrador debe añadir a
+// deluge-sim / test_preset.inc — Preset import/export tests
+// CONTRACT: included VERBATIM inside the anonymous namespace of
+// tests/test_all.cpp, after check() and make_sine(...). No #include,
+// no main() and no check() of its own: only test_preset_xxx() and
+// file-static helpers. Only header the integrator must add to
 // test_all.cpp:   #include "deluge_sim/preset.hpp"
 // =====================================================================
 
 // ------------------------------ helpers ------------------------------
 
-// Igualdad por BITS de doubles (los valores de estos tests son finitos:
-// NaN no llega porque save_preset lo rechaza). ±0 se distingue con signbit.
+// Equality by BITS of doubles (the values in these tests are finite:
+// NaN never arrives because save_preset rejects it). ±0 distinguished
+// with signbit.
 static bool preset_bits_equal(double a, double b) {
-    if (a != b) return false;                           // NaN cae aquí también
+    if (a != b) return false;                           // NaN also lands here
     if (a == 0.0) return std::signbit(a) == std::signbit(b);
     return true;
 }
 
-// Comparación profunda de 'params' con semántica de bits exacta.
+// Deep comparison of 'params' with exact bit semantics.
 static bool preset_params_bits_equal(const ChainPreset& a, const ChainPreset& b) {
     if (a.params.size() != b.params.size()) return false;
     auto ia = a.params.begin();
@@ -35,7 +36,7 @@ static bool preset_params_bits_equal(const ChainPreset& a, const ChainPreset& b)
     return true;
 }
 
-// Escribe texto plano (para casos JSON rotos escritos a mano).
+// Writes plain text (for hand-written broken JSON cases).
 static bool preset_write_text(const std::string& path, const std::string& text) {
     std::ofstream f(path, std::ios::binary | std::ios::trunc);
     if (!f) return false;
@@ -43,8 +44,8 @@ static bool preset_write_text(const std::string& path, const std::string& text) 
     return bool(f);
 }
 
-// Lee un archivo completo a string (sin istreambuf_iterator para no
-// depender de <iterator>, que no está en la lista del contrato).
+// Reads a whole file into a string (no istreambuf_iterator to avoid
+// depending on <iterator>, which is not in the contract's list).
 static std::string preset_read_text(const std::string& path) {
     std::ifstream f(path, std::ios::binary);
     if (!f) return std::string();
@@ -56,30 +57,30 @@ static std::string preset_read_text(const std::string& path) {
     return s;
 }
 
-// Caso de JSON roto: texto y etiqueta para los mensajes.
+// Broken JSON case: text and label for the messages.
 struct PresetBrokenCase {
     const char* text;
     const char* label;
 };
 
-// ------------------------------ pruebas ------------------------------
+// ------------------------------ tests --------------------------------
 
-// a) Roundtrip bit-exacto: valores "feos" (pi, 1e-9, -45.5, 1e21, 0.0,
-//    más -0.0 y la denormal mínima) sobreviven guardar+cargar idénticos.
+// a) Bit-exact roundtrip: "ugly" values (pi, 1e-9, -45.5, 1e21, 0.0,
+//    plus -0.0 and the minimum denormal) survive save+load identically.
 void test_preset_roundtrip() {
     std::cout << "[test] preset: roundtrip JSON bit-exacto con valores feos\n";
     namespace fs = std::filesystem;
     const std::string path = (fs::temp_directory_path() /
                               "deluge_sim_test_preset.json").string();
-    ChainPreset p;                                      // version 1 por defecto
-    p.chain = {"eq", "plate", "fet76"};                 // orden de inserción
+    ChainPreset p;                                      // version 1 by default
+    p.chain = {"eq", "plate", "fet76"};                 // insertion order
     p.params["eq"]["freq_hz"]      = 3.141592653589793;
     p.params["eq"]["boost_db"]     = 1e-9;
     p.params["plate"]["decay_s"]   = -45.5;
     p.params["plate"]["damp_pct"]  = 1e21;
     p.params["fet76"]["thresh_db"] = 0.0;
-    p.params["fet76"]["negzero"]   = -0.0;              // el signo debe sobrevivir
-    p.params["fet76"]["subnormal"] = 5e-324;            // denormal mínima
+    p.params["fet76"]["negzero"]   = -0.0;              // the sign must survive
+    p.params["fet76"]["subnormal"] = 5e-324;            // minimum denormal
     std::string err;
     check(save_preset(path, p, err), "guardado del preset");
     ChainPreset back;
@@ -100,7 +101,7 @@ void test_preset_roundtrip() {
     check(back.params["fet76"]["subnormal"] == 5e-324,
           "5e-324 (denormal) bit-exacto");
 
-    // El ejemplo del banner del header carga tal cual (formato documentado).
+    // The header banner example loads as-is (documented format).
     const std::string ejemplo =
         "{\n"
         "  \"version\": 1,\n"
@@ -122,7 +123,7 @@ void test_preset_roundtrip() {
           "ejemplo: los cuatro parámetros exactos");
 }
 
-// b) JSON roto (10 variantes): siempre false y err con "línea N".
+// b) Broken JSON (10 variants): always false and err with "línea N".
 void test_preset_malformed() {
     std::cout << "[test] preset: JSON roto -> false y err con 'línea N'\n";
     namespace fs = std::filesystem;
@@ -152,8 +153,8 @@ void test_preset_malformed() {
     }
 }
 
-// c) Campos desconocidos ("author", "tags", "meta") se cargan sin error
-//    y se ignoran (forward-compat documentado).
+// c) Unknown fields ("author", "tags", "meta") load without error
+//    and are ignored (documented forward-compat).
 void test_preset_unknown_fields() {
     std::cout << "[test] preset: campos desconocidos se ignoran (forward-compat)\n";
     namespace fs = std::filesystem;
@@ -180,8 +181,8 @@ void test_preset_unknown_fields() {
           "params leídos intactos (extras ignorados)");
 }
 
-// d) Tipos incorrectos: chain con número, parámetro con string, etc.
-//    Cada caso => false y err que menciona el elemento culpable y 'línea'.
+// d) Wrong types: chain with a number, parameter with a string, etc.
+//    Each case => false and err mentioning the culprit element and 'línea'.
 void test_preset_bad_types() {
     std::cout << "[test] preset: tipos incorrectos -> false y err claro\n";
     namespace fs = std::filesystem;
@@ -216,22 +217,22 @@ void test_preset_bad_types() {
               std::string("err menciona '") + c.must_mention + "' y 'línea' (" +
               c.label + "): " + err);
     }
-    // NaN al guardar: el JSON no representa NaN/Inf => false + err accionable.
+    // NaN on save: JSON cannot represent NaN/Inf => false + actionable err.
     ChainPreset p;
     p.params["eq"]["drive"] = std::numeric_limits<double>::quiet_NaN();
     std::string err;
-    const bool guardado = save_preset(path, p, err);   // aparte: err legible en el check
+    const bool guardado = save_preset(path, p, err);   // separate: err readable in the check
     check(!guardado && err.find("no es finito") != std::string::npos,
           "NaN al guardar => rechazado con err (err: " + err + ")");
 }
 
-// e) Cadena y params vacíos: roundtrip completo y JSON emitido correcto.
+// e) Empty chain and params: full roundtrip and correct emitted JSON.
 void test_preset_empty() {
     std::cout << "[test] preset: cadena y params vacíos -> roundtrip OK\n";
     namespace fs = std::filesystem;
     const std::string path = (fs::temp_directory_path() /
                               "deluge_sim_test_preset_empty.json").string();
-    ChainPreset p;                                      // version 1, todo vacío
+    ChainPreset p;                                      // version 1, all empty
     std::string err;
     check(save_preset(path, p, err), "guardado del preset vacío");
     ChainPreset back;
@@ -244,21 +245,21 @@ void test_preset_empty() {
           "el JSON emitido usa 'chain': [] y 'params': {}");
 }
 
-// Extra (errores de disco): rutas imposibles => false + err accionable.
+// Extra (disk errors): impossible paths => false + actionable err.
 void test_preset_disk_errors() {
     std::cout << "[test] preset: errores de disco accionables\n";
     namespace fs = std::filesystem;
     const std::string dir = (fs::temp_directory_path() /
                              "deluge_sim_preset_dir_inexistente").string();
     std::error_code ec;
-    fs::remove_all(dir, ec);                            // asegura inexistencia
+    fs::remove_all(dir, ec);                            // ensures it does not exist
     const std::string missing = dir + "/preset.json";
     ChainPreset p;
     std::string err;
-    const bool saved = save_preset(missing, p, err);   // aparte: err legible en el check
+    const bool saved = save_preset(missing, p, err);   // separate: err readable in the check
     check(!saved && err.find("no se pudo crear") != std::string::npos,
           "save en carpeta inexistente => err accionable (err: " + err + ")");
-    const bool loaded = load_preset(missing, p, err);  // aparte: err legible en el check
+    const bool loaded = load_preset(missing, p, err);  // separate: err readable in the check
     check(!loaded && err.find("no se pudo abrir") != std::string::npos,
           "load de archivo inexistente => err accionable (err: " + err + ")");
     fs::remove_all(dir, ec);

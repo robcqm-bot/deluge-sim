@@ -1,7 +1,7 @@
 // =====================================================================
-// SUITE-CORE / passive_eq.cpp — EQ pasivo de programa (referencia)
-// Zona propia del cortafuegos: solo C++ estándar. Sin allocaciones en
-// process(); sin excepciones; salida siempre finita.
+// SUITE-CORE / passive_eq.cpp — Passive program EQ (reference)
+// Firewall own zone: standard C++ only. No allocations in process();
+// no exceptions; output always finite.
 // =====================================================================
 #include "suite_core/passive_eq.hpp"
 
@@ -21,11 +21,11 @@ void PassiveEQRef::set_sample_rate(double sr) {
 }
 
 void PassiveEQRef::recompute_coefficients() {
-    // --- Etapa 1: REFUERZO peaking en freq_hz (RBJ, exacto) ---
+    // --- Stage 1: BOOST peaking at freq_hz (RBJ, exact) ---
     {
         const double f0 = params_.freq_hz;
         const double Q = params_.q_boost;
-        const double A = std::pow(10.0, params_.boost_db / 40.0);   // G/2 en lin
+        const double A = std::pow(10.0, params_.boost_db / 40.0);   // G/2 linear
         const double w0 = 2.0 * kPi * f0 / sample_rate_;
         const double cw = std::cos(w0), sw = std::sin(w0);
         const double alpha = sw / (2.0 * Q);
@@ -38,11 +38,11 @@ void PassiveEQRef::recompute_coefficients() {
             boost_[ch].a2 = (1.0 - alpha / A) / a0;
         }
     }
-    // --- Etapa 2: RECorte peaking en kCutFreqRatio * freq_hz ---
+    // --- Stage 2: CUT peaking at kCutFreqRatio * freq_hz ---
     {
         const double f0 = params_.freq_hz * kCutFreqRatio;
         const double Q = params_.q_cut;
-        const double A = std::pow(10.0, -params_.cut_db / 40.0);   // ganancia NEGATIVA
+        const double A = std::pow(10.0, -params_.cut_db / 40.0);   // NEGATIVE gain
         const double w0 = 2.0 * kPi * f0 / sample_rate_;
         const double cw = std::cos(w0), sw = std::sin(w0);
         const double alpha = sw / (2.0 * Q);
@@ -73,8 +73,8 @@ void PassiveEQRef::set_params(const Params& p) {
 }
 
 double PassiveEQRef::magnitude_db(double freq) const {
-    // |H(e^jw)| de un biquad: |(b0 + b1 z + b2 z^2) / (1 + a1 z + a2 z^2)|
-    // con z = e^(-jw). Producto de las dos etapas + trim (todo exacto).
+    // |H(e^jw)| of a biquad: |(b0 + b1 z + b2 z^2) / (1 + a1 z + a2 z^2)|
+    // with z = e^(-jw). Product of the two stages + trim (all exact).
     const double w = 2.0 * kPi * freq / sample_rate_;
     const std::complex<double> z(std::cos(w), -std::sin(w));
     const std::complex<double> z2 = z * z;

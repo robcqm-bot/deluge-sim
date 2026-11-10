@@ -1,7 +1,7 @@
 # =====================================================================
 # deluge-sim — build (CMake >= 3.15, C++17)
 # Targets: deluge_sim_lib | suite_core | board_core | simcli | simtests
-#          | board_sim (opcional, requiere SDL2)
+#          | board_sim (optional, requires SDL2)
 # =====================================================================
 cmake_minimum_required(VERSION 3.15)
 project(deluge_sim LANGUAGES CXX)
@@ -16,7 +16,7 @@ else()
     add_compile_options(-Wall -Wextra -O2)
 endif()
 
-# ---- núcleo del simulador (zona deluge_sim) ----
+# ---- simulator core (deluge_sim zone) ----
 add_library(deluge_sim_lib STATIC
     src/wav_io.cpp
     src/engine.cpp
@@ -25,7 +25,7 @@ add_library(deluge_sim_lib STATIC
 )
 target_include_directories(deluge_sim_lib PUBLIC include)
 
-# ---- zona propia del cortafuegos (suite_core) ----
+# ---- firewall own zone (suite_core) ----
 add_library(suite_core STATIC
     suite_core/src/fet76_ref.cpp
     suite_core/src/opto_comp.cpp
@@ -34,16 +34,16 @@ add_library(suite_core STATIC
     suite_core/src/tape_sat.cpp
 )
 target_include_directories(suite_core PUBLIC suite_core/include)
-# NOTA DE ARQUITECTURA: suite_core NO enlaza contra deluge_sim_lib.
-# La dependencia va en una sola dirección: app -> ambas.
+# ARCHITECTURE NOTE: suite_core does NOT link against deluge_sim_lib.
+# The dependency goes in one direction only: app -> both.
 
 # ---- CLI ----
 add_executable(simcli app/main.cpp)
 target_link_libraries(simcli PRIVATE deluge_sim_lib suite_core)
 
-# ---- núcleo del board (fase 2, SDL-free) ----
-# Capa app: conoce deluge_sim pero NUNCA incluye SDL (el shell gráfico
-# board_sim es la única pieza que enlaza SDL2).
+# ---- board core (phase 2, SDL-free) ----
+# App layer: knows deluge_sim but NEVER includes SDL (the graphical
+# shell board_sim is the only piece that links SDL2).
 add_library(board_core STATIC
     app/board_sim/board_core.cpp
 )
@@ -57,16 +57,17 @@ target_include_directories(simtests PRIVATE app)   # fx_factory.hpp
 target_link_libraries(simtests PRIVATE deluge_sim_lib suite_core board_core)
 add_test(NAME all_tests COMMAND simtests)
 
-# ---- board simulator SDL2 (opcional; fase 2 v0.2) ----
-# Rutas aceptadas:
-#   -SDL2_SDK_DIR=<...>/x86_64-w64-mingw32   (SDK oficial de SDL para MinGW;
-#        también via variable de entorno SDL2_SDK)
+# ---- SDL2 board simulator (optional; phase 2 v0.2) ----
+# Accepted paths:
+#   -SDL2_SDK_DIR=<...>/x86_64-w64-mingw32   (official SDL SDK for MinGW;
+#        also via the SDL2_SDK environment variable)
 #   - find_package(SDL2) (Linux: libsdl2-dev; CI Ubuntu)
-# Si no hay SDL2 el target se omite con un aviso y el resto sigue igual.
+# If there is no SDL2 the target is skipped with a notice and the rest
+# proceeds unchanged.
 set(SDL2_SDK_DIR "$ENV{SDL2_SDK}" CACHE PATH "Ruta SDK SDL2 (subcarpeta del triplet)")
 find_package(SDL2 QUIET)
 
-# Definición común del target (la variante solo cambia cómo se enlaza SDL).
+# Common target definition (the variant only changes how SDL is linked).
 function(_add_board_sim)
     add_executable(board_sim app/board_sim/board_main.cpp)
     target_link_libraries(board_sim PRIVATE deluge_sim_lib suite_core board_core)

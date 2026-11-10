@@ -1,7 +1,7 @@
 // =====================================================================
-// deluge-sim / adapter_opto.hpp — Adaptador del procesador óptico
-// Mismo patrón de cortafuegos que adapter_fet76.hpp: único puente
-// delimitado entre deluge_sim y suite_core para OptoCompRef.
+// deluge-sim / adapter_opto.hpp — Opto processor adapter
+// Same firewall pattern as adapter_fet76.hpp: only bounded
+// bridge between deluge_sim and suite_core for OptoCompRef.
 // =====================================================================
 #pragma once
 #include "deluge_sim/core.hpp"

@@ -1,7 +1,7 @@
 // =====================================================================
-// SUITE-CORE / opto_comp.cpp — Compresor óptico de referencia
-// Zona propia del cortafuegos: solo C++ estándar. Sin allocaciones en
-// process(); sin excepciones; salida siempre finita.
+// SUITE-CORE / opto_comp.cpp — Reference optical compressor
+// Firewall own zone: standard C++ only. No allocations in process();
+// no exceptions; output always finite.
 // =====================================================================
 #include "suite_core/opto_comp.hpp"
 
@@ -12,7 +12,7 @@ namespace suite_core {
 namespace {
 constexpr double kLnToDb = 8.685889638065035;      // 20/ln(10)
 constexpr double kDbToLn = 0.11512925464970229;    // ln(10)/20
-constexpr double kFloorLin = 1e-12;                // -240 dBFS (suelo del detector)
+constexpr double kFloorLin = 1e-12;                // -240 dBFS (detector floor)
 constexpr double kFloorDb = -240.0;
 } // namespace
 
@@ -22,7 +22,7 @@ void OptoCompRef::set_sample_rate(double sr) {
 }
 
 void OptoCompRef::recompute_coefficients() {
-    // One-pole por muestra: coef = 1 - exp(-1/(sr * tau)).
+    // Per-sample one-pole: coef = 1 - exp(-1/(sr * tau)).
     attack_coef_ = 1.0 - std::exp(-1.0 / (sample_rate_ * std::max(params_.attack_s, 1e-4)));
     release_fast_coef_ =
         1.0 - std::exp(-1.0 / (sample_rate_ * std::max(params_.release_fast_s, 1e-3)));
@@ -42,7 +42,7 @@ void OptoCompRef::set_params(const Params& p) {
     params_.attack_s       = std::clamp(p.attack_s, 0.002, 0.2);
     params_.release_fast_s = std::clamp(p.release_fast_s, 0.01, 0.5);
     params_.release_slow_s = std::clamp(p.release_slow_s, 0.05, 3.0);
-    // La cola lenta no puede ser más rápida que la caída inicial.
+    // The slow tail cannot be faster than the initial fall.
     params_.release_slow_s = std::max(params_.release_slow_s, params_.release_fast_s);
     params_.gr_span_db     = std::clamp(p.gr_span_db, 1.0, 24.0);
     params_.out_gain_db    = std::clamp(p.out_gain_db, -24.0, 24.0);
@@ -53,8 +53,8 @@ double OptoCompRef::gain_law_db(double e) const {
     const double s = 1.0 - 1.0 / std::max(params_.ratio, 1.000001);
     const double w = std::max(params_.knee_db, 1e-9);
     if (e <= 0.0) return 0.0;
-    if (e <= w) return s * e * e / (2.0 * w);         // rodilla cuadrática C1
-    return s * (e - 0.5 * w);                          // tramo lineal (s = 1 - 1/R)
+    if (e <= w) return s * e * e / (2.0 * w);         // C1 quadratic knee
+    return s * (e - 0.5 * w);                          // linear segment (s = 1 - 1/R)
 }
 
 void OptoCompRef::reset() {
@@ -76,9 +76,9 @@ void OptoCompRef::process(float* L, float* R, size_t frames) {
             if (!std::isfinite(xr)) { xr = 0.0f; ++bad_inputs_; }
         }
 
-        // ---- Detector: envolvente one-pole de max(|L|,|R|), ASIMÉTRICA.
-        //      Sube con el attack de la fotocélula; baja con el release
-        //      program-dependent (rápido con GR profunda, lento al final).
+        // ---- Detector: one-pole envelope of max(|L|,|R|), ASYMMETRIC.
+        //      Rises with the photocell attack; falls with the release,
+        //      program-dependent (fast with deep GR, slow at the end).
         const double det = std::fmax(std::fabs(double(xl)),
                                      R ? std::fabs(double(xr)) : 0.0);
         double coef;
@@ -89,9 +89,9 @@ void OptoCompRef::process(float* L, float* R, size_t frames) {
             coef = release_slow_coef_ + (release_fast_coef_ - release_slow_coef_) * depth;
         }
         env_ += (det - env_) * coef;
-        if (env_ < kFloorLin) env_ = 0.0;   // evita denormales en silencio largo
+        if (env_ < kFloorLin) env_ = 0.0;   // avoids denormals in long silence
 
-        // ---- Ley estática de ganancia sobre el nivel del detector.
+        // ---- Static gain law over the detector level.
         const double lvl_db = (env_ > kFloorLin) ? std::log(env_) * kLnToDb : kFloorDb;
         gr_db_ = -gain_law_db(lvl_db - thresh);
 

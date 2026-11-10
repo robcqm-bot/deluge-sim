@@ -1,7 +1,7 @@
 // =====================================================================
-// deluge-sim / adapter_plate.hpp — Adaptador de la reverb de placa
-// Mismo patrón de cortafuegos que adapter_fet76.hpp: único puente
-// delimitado entre deluge_sim y suite_core para PlateReverbRef.
+// deluge-sim / adapter_plate.hpp — Plate reverb adapter
+// Same firewall pattern as adapter_fet76.hpp: only bounded
+// bridge between deluge_sim and suite_core for PlateReverbRef.
 // =====================================================================
 #pragma once
 #include "deluge_sim/core.hpp"
