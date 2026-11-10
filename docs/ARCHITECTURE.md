@@ -1,4 +1,4 @@
-# ARCHITECTURE.md — deluge-sim v0.2
+# ARCHITECTURE.md — deluge-sim v0.3
 
 > (Documento de arquitectura en español — traducciones al inglés bienvenidas.)
 
@@ -11,7 +11,7 @@
 | **Strategy** | `IProcessor` | Cada FX (Fet76Ref hoy, PLATE-140 mañana) es intercambiable sin tocar el motor |
 | **Pipeline** | `Engine::run` / `BoardPump::pump` | Render por bloques: fuente → cadena ordenada → sumidero; espejo del flujo real del firmware Deluge (blocks → FX → master) |
 | **Firewall (module boundary)** | `suite_core/` vs `include/deluge_sim/` | Dos bibliotecas estáticas INDEPENDIENTES; la dependencia va en una sola dirección (`app → ambas`). Ningún header cruza la frontera. El único puente es un adaptador de ~30 líneas (`AdapterFet76` en `app/adapter_fet76.hpp`) |
-| **Adapter** | `AdapterFet76` | Traduce `deluge_sim::Block` (tipo del sim) → punteros crudos `float*` (tipo de suite-core). En la integración real al firmware este archivo vive en `src/deluge/dsp/suite/`. Compartido por simcli y boardsim (extraído a header en v0.2) |
+| **Adapter** | `AdapterFet76`, `AdapterOpto` | Traduce `deluge_sim::Block` (tipo del sim) → punteros crudos `float*` (tipo de suite-core). En la integración real al firmware estos archivos viven en `src/deluge/dsp/suite/`. Compartidos por simcli y boardsim (headers `app/adapter_*.hpp`) |
 | **DTO + Report** | `RunReport` | Telemetría explícita en vez de prints dispersos |
 | **Facade + composición** | `BoardPump` (v0.2) | El lazo interactivo del board REUSA `FileAudioSource`, `IProcessor` y la guardia del engine en vez de duplicar el pipeline: solo cambia el modo de conducción (cadencia fija a demanda vs batch completo) |
 
@@ -38,17 +38,20 @@ deluge-sim\
 │   ├── wav_io.cpp
 │   └── engine.cpp
 ├── suite_core\                           # <<< ZONA PROPIA (cortafuegos)
-│   ├── include\suite_core\fet76_ref.hpp
+│   ├── include\suite_core\fet76_ref.hpp  # compresor FET feedback
+│   ├── include\suite_core\opto_comp.hpp  # compresor óptico (v0.3)
 │   └── src\fet76_ref.cpp
+│   └── src\opto_comp.cpp
 ├── app\
-│   ├── adapter_fet76.hpp                 # EL ADAPTADOR (el puente, compartido)
-│   ├── main.cpp                          # simcli
+│   ├── adapter_fet76.hpp                 # adaptador fet76 (el puente)
+│   ├── adapter_opto.hpp                  # adaptador opto (v0.3)
+│   ├── main.cpp                          # simcli (--chain desde v0.3)
 │   └── board_sim\                        # <<< fase 2 (v0.2)
 │       ├── board_clock.hpp               # stubs de reloj (48 kHz, bloque 128)
 │       ├── board_core.hpp/.cpp           # SdCard + PadGrid + BoardPump (SDL-free)
 │       └── board_main.cpp                # boardsim: ÚNICO archivo que enlaza SDL2
 └── tests\
-    └── test_all.cpp                      # simtests (exit 0 = aceptación, 13 pruebas)
+    └── test_all.cpp                      # simtests (exit 0 = aceptación, 19 pruebas)
 ```
 
 ## 3. Data Flow
@@ -127,7 +130,7 @@ en cada corrida — es el indicador de regresión de rendimiento del proyecto.
 - Preferido: `cmake -B build -A x64 && cmake --build build --config Release`
   → `build\Release\simtests.exe` + `simcli.exe`
 - Alternativa (MinGW/g++): `./build.sh run`
-- Puerta de aceptación: `simtests` exit 0 (13 pruebas con expectativa matemática)
+- Puerta de aceptación: `simtests` exit 0 (19 pruebas con expectativa matemática)
 - **board_sim (opcional)**: pasa `-DSDL2_SDK_DIR=<SDK>/x86_64-w64-mingw32`
   (SDK oficial MinGW de libsdl-org; la DLL se copia junto al exe) o instala
   `libsdl2-dev` (Linux, find_package). Sin SDL2 el target se omite con un
@@ -177,3 +180,32 @@ SD (carpeta host) ──read_wav──► WavData (viva mientras la canción car
    headless y matemáticas.
 4. **Sample rate incompatible = rechazo accionable** (el resample es fase
    futura, documentada en TODO).
+
+## 8. Procesadores de referencia (suite_core)
+
+Todos los FX comparten el mismo contrato: `set_params` (clamp centralizado),
+`set_sample_rate`, `prepare`, `process(float* L, float* R, n)` in-place sin
+allocaciones ni excepciones, `reset`, y telemetría `current_gr_db` /
+`bad_input_count`. Cada ley estática es PÚBLICA y EXACTA — es la expectativa
+matemática que `simtests` verifica.
+
+| FX | Modelo | Ley de ganancia |
+|---|---|---|
+| `Fet76Ref` | FET de realimentación (detector = salida de la celda, muestra previa) | curva feedback: out_peak = (in_peak + k·thresh)/(1+k), k = 1−1/R |
+| `OptoCompRef` | fotocélula: detector = envolvente one-pole ASIMÉTRICA de max(\|L\|,\|R\|) | rodilla suave C1 sobre el exceso e: `e≤0: 0 · 0<e≤w: s·e²/(2w) · e>w: s·(e−w/2)`, s = 1−1/R, w = knee_db |
+
+**OptoCompRef, decisiones documentadas:**
+
+1. **Ballística asimétrica**: attack one-pole al subir el nivel (10 ms por
+   defecto — fotocélula lenta), release al bajar.
+2. **Release program-dependent** (la firma del opto): los COEFICIENTES
+   one-pole interpola linealmente entre `release_slow_s` (GR→0) y
+   `release_fast_s` (|GR| ≥ `gr_span_db`). Como coef ≈ 1/(fs·tau), interpolar
+   coeficientes = interpolar 1/tau: la caída inicial sale rápida y la cola se
+   alarga al despejar. Los tests fijan la banda medida (profundo ~170 ms vs
+   somero ~70 ms a −1 dB, razón > 1.5).
+3. **Ley EXACTA verificable con DC**: el detector converge exactamente a la
+   entrada constante, así que la GR estacionaria es la ley evaluada — los
+   tests la comprueban a 1e-3 dB en tres puntos (rodilla, juntura, lineal).
+4. **Costo por muestra**: 1 `log`/muestra del detector + 1 `exp` (ganancia) +
+   aritmética escalar — mismo orden que Fet76Ref.

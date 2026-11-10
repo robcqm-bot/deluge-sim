@@ -14,11 +14,19 @@ grid, fixed-hardware block cadence and live audio device output — so
 processors can be exercised interactively without flashing firmware. The
 core harness stays dependency-free; SDL2 is linked only by this app target.
 
-- ✅ Working reference processor: `Fet76Ref`, a textbook FET-style
-  feedback compressor (stereo-linked, one-pole ballistics)
+**v0.3 — processor chain + opto reference**: `simcli render --chain` builds
+a chain of reference processors in insertion order (shared k=v parameters
+or per-fx `fx.k=v` prefixes), and a second reference processor ships:
+`OptoCompRef`, an opto-cell compressor with asymmetric (slow) ballistics
+and program-dependent release.
+
+- ✅ Working reference processors: `Fet76Ref` (textbook FET-style feedback
+  compressor, stereo-linked, one-pole ballistics) and `OptoCompRef`
+  (opto-cell compressor with soft-knee gain law, slow photoresistor
+  attack and program-dependent release)
 - ✅ Dependency-free RIFF/WAV reader & writer (PCM16/24/32, float32,
   WAVE_FORMAT_EXTENSIBLE)
-- ✅ Test suite with mathematically documented expectations (13 cases)
+- ✅ Test suite with mathematically documented expectations (19 cases)
 - ✅ Clean module boundary ("firewall") between the host framework and
   your DSP code — see below
 
@@ -81,15 +89,21 @@ cmake --build build --config Release   # SDL2.dll is copied next to the exe
 ## Usage
 
 ```bash
-# run the acceptance tests (13 cases, mathematically documented)
+# run the acceptance tests (19 cases, mathematically documented)
 build/simtests.exe
 
-# render a file through the reference compressor
+# render a file through a chain of reference processors
 build/simcli.exe render --in input.wav --out output.wav \
-    thresh_db=-18 ratio=8 attack_s=0.0008 release_s=0.25 in_gain_db=3
+    --chain fet76,opto thresh_db=-18 ratio=8 attack_s=0.0008 release_s=0.25
 
-# parameters: thresh_db ratio attack_s release_s in_gain_db out_gain_db
-#             --block N   (frames per render block, 8..65536)
+# per-fx parameters (unprefixed keys apply to every fx that has them)
+build/simcli.exe render --in in.wav --out out.wav --chain fet76,opto \
+    fet76.ratio=8 opto.knee_db=3 opto.release_slow_s=1.0
+
+# fet76 keys: in_gain_db thresh_db ratio attack_s release_s out_gain_db
+# opto keys:  thresh_db ratio knee_db attack_s release_fast_s
+#             release_slow_s gr_span_db out_gain_db
+# --block N   (frames per render block, 8..65536)
 ```
 
 ### Board simulator
@@ -133,8 +147,9 @@ See [TODO.md](TODO.md). Highlights:
 1. ~~**Phase 2 — board simulator**~~ ✅ delivered in v0.2 (`board_sim`,
    SDL2). Next steps for it: preset/clip persistence on the "SD card" and
    a song-browsing UI.
-2. More reference processors (opto-style, passive-EQ-style, plate-style FDN
-   reverb) behind the same `IProcessor` contract.
+2. ~~More reference processors (opto-style...)~~ **opto shipped in v0.3**.
+   Next: passive-EQ-style, plate-style FDN reverb, tape-style saturation —
+   all behind the same `IProcessor` contract.
 3. Streaming file source for very long renders.
 4. Preset import/export.
 

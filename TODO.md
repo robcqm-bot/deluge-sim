@@ -8,7 +8,8 @@
       canciones en la ventana
 
 ## More reference processors (each with tests + documented expectations)
-- [ ] Opto-style compressor (slow photoresistor ballistics)
+- [x] Opto-style compressor (slow photoresistor ballistics + program-
+      dependent release) ✅ v0.3 (`OptoCompRef`)
 - [ ] Passive-style program EQ (boost/cut trick)
 - [ ] Plate-style FDN reverb (modulated)
 - [ ] Tape-style saturation (per-track insert)

@@ -1,16 +1,20 @@
 // =====================================================================
-// deluge-sim / main.cpp — simcli: CLI del simulador (harness offline v0.1)
+// deluge-sim / main.cpp — simcli: CLI del simulador (harness offline)
 //
-//   simcli render --in entrada.wav --out salida.wav [k=v ...]
-//       k válidos: thresh_db ratio attack_s release_s in_gain_db out_gain_db
-//                  block=<marcos por bloque>
+//   simcli render --in entrada.wav --out salida.wav [--chain a,b] [k=v ...]
+//       --chain : fx en orden de inserción (default fet76); válidos:
+//                 fet76, opto
+//       k=v     : sin prefijo se aplica a CADA fx de la cadena que tenga
+//                 ese parámetro; con prefijo "fx.k=v" solo a ese fx.
+//       --block : marcos por bloque de render
 //   simcli help
 //
-// Aquí vive EL ADAPTADOR (el único puente delimitado entre deluge_sim y
-// suite_core). En la integración real al firmware, este adaptador se
-// traslada a src/deluge/dsp/suite/fet76_adapter.cpp.
+// Aquí viven LOS ADAPTADORES (el único puente delimitado entre
+// deluge_sim y suite_core; las clases están en adapter_*.hpp). En la
+// integración real al firmware se trasladan a src/deluge/dsp/suite/.
 // =====================================================================
 #include "adapter_fet76.hpp"
+#include "adapter_opto.hpp"
 #include "deluge_sim/engine.hpp"
 #include "deluge_sim/wav_io.hpp"
 
@@ -18,18 +22,38 @@
 #include <cstring>
 #include <iostream>
 #include <map>
+#include <sstream>
 #include <string>
+#include <vector>
 
 namespace {
 
 using namespace deluge_sim;
 
+// Claves k=v conocidas por cada fx (sin prefijo). El prefijo "fx." las
+// dirige a un solo eslabón de la cadena.
+const std::map<std::string, std::vector<const char*>>& fx_keys() {
+    static const std::map<std::string, std::vector<const char*>> m = {
+        {"fet76", {"in_gain_db", "thresh_db", "ratio", "attack_s",
+                   "release_s", "out_gain_db"}},
+        {"opto",  {"thresh_db", "ratio", "knee_db", "attack_s",
+                   "release_fast_s", "release_slow_s", "gr_span_db",
+                   "out_gain_db"}},
+    };
+    return m;
+}
+
 void print_usage() {
     std::cout <<
-        "deluge-sim v0.2 (offline DSP harness + board simulator)\n"
+        "deluge-sim v0.3 (offline DSP harness + board simulator)\n"
         "Uso:\n"
-        "  simcli render --in ENTRADA.wav --out SALIDA.wav [k=v ...] [--block N]\n"
-        "    k: thresh_db ratio attack_s release_s in_gain_db out_gain_db\n"
+        "  simcli render --in ENTRADA.wav --out SALIDA.wav [--chain fet76,opto]"
+        " [k=v ...] [--block N]\n"
+        "    --chain: fx en orden de inserción (default fet76)\n"
+        "    k fet76: in_gain_db thresh_db ratio attack_s release_s out_gain_db\n"
+        "    k opto:  thresh_db ratio knee_db attack_s release_fast_s"
+        " release_slow_s gr_span_db out_gain_db\n"
+        "    prefijo por fx: fet76.ratio=8 opto.knee_db=3\n"
         "  simcli help\n";
 }
 
@@ -45,9 +69,40 @@ bool parse_double(const std::string& s, double& out) {
     }
 }
 
+// La clave es válida si: sin prefijo y la tiene algún fx de la cadena,
+// o con prefijo "fx." y la tiene ese fx.
+bool key_known(const std::string& k, const std::vector<std::string>& chain) {
+    const size_t dot = k.find('.');
+    if (dot != std::string::npos) {
+        const std::string fx = k.substr(0, dot), rest = k.substr(dot + 1);
+        if (rest.find('.') != std::string::npos) return false;
+        const auto it = fx_keys().find(fx);
+        if (it == fx_keys().end()) return false;
+        for (const char* vk : it->second)
+            if (rest == vk) return true;
+        return false;
+    }
+    for (const std::string& fx : chain) {
+        for (const char* vk : fx_keys().at(fx))
+            if (k == vk) return true;
+    }
+    return false;
+}
+
+// Valor de 'key' para el fx 'name': primero el prefijado "name.key",
+// luego el sin prefijo (se aplica a todos), y si no existe el default.
+double kv_val(const std::map<std::string, double>& kv, const std::string& name,
+              const char* key, double def) {
+    auto it = kv.find(name + "." + key);
+    if (it != kv.end()) return it->second;
+    it = kv.find(key);
+    return (it != kv.end()) ? it->second : def;
+}
+
 int cmd_render(int argc, char** argv) {
     std::string in, out;
     double block = double(kDefaultMaxBlock);
+    std::vector<std::string> chain{"fet76"};
     std::map<std::string, double> kv;
 
     for (int i = 0; i < argc; ++i) {
@@ -59,21 +114,36 @@ int cmd_render(int argc, char** argv) {
                 std::cerr << "ERROR: --block fuera de rango [8,65536]\n";
                 return 2;
             }
-        } else if (a.find('=') != std::string::npos) {
-            std::string k = a.substr(0, a.find('=')), v = a.substr(a.find('=') + 1);
-            static const char* kValid[] = {"thresh_db", "ratio", "attack_s",
-                                           "release_s", "in_gain_db", "out_gain_db"};
-            bool known = false;
-            for (const char* vk : kValid) known = known || (k == vk);
-            double d = 0.0;
-            if (!known || !parse_double(v, d)) {
-                std::cerr << "ERROR: parámetro desconocido o inválido: '" << a << "'\n"
-                          << "Válidos: thresh_db ratio attack_s release_s "
-                             "in_gain_db out_gain_db\n";
+        } else if (a == "--chain" && i + 1 < argc) {
+            std::stringstream ss(argv[++i]);
+            std::string item;
+            chain.clear();
+            while (std::getline(ss, item, ',')) {
+                // recorta espacios del ítem
+                const size_t b = item.find_first_not_of(" \t");
+                const size_t e = item.find_last_not_of(" \t");
+                if (b == std::string::npos) continue;
+                item = item.substr(b, e - b + 1);
+                if (fx_keys().count(item) == 0) {
+                    std::cerr << "ERROR: fx desconocido en --chain: '" << item
+                              << "' (válidos: fet76 opto)\n";
+                    return 2;
+                }
+                chain.push_back(item);
+            }
+            if (chain.empty()) {
+                std::cerr << "ERROR: --chain vacío\n";
                 return 2;
             }
-            kv[k] = d;
-        } else {
+        } else if (a.find('=') != std::string::npos) {
+            std::string k = a.substr(0, a.find('=')), v = a.substr(a.find('=') + 1);
+            double d = 0.0;
+            if (!parse_double(v, d)) {
+                std::cerr << "ERROR: valor numérico inválido en '" << a << "'\n";
+                return 2;
+            }
+            kv[k] = d;                         // la validez de la clave se
+        } else {                               // comprueba tras conocer --chain
             std::cerr << "ERROR: argumento no reconocido: '" << a << "'\n";
             print_usage();
             return 2;
@@ -84,6 +154,21 @@ int cmd_render(int argc, char** argv) {
         print_usage();
         return 2;
     }
+    for (const auto& [k, v] : kv) {
+        if (!key_known(k, chain)) {
+            std::cerr << "ERROR: parámetro desconocido para la cadena actual: '"
+                      << k << "'\nVálidos: ";
+            bool first = true;
+            for (const std::string& fx : chain)
+                for (const char* vk : fx_keys().at(fx)) {
+                    if (!first) std::cerr << ' ';
+                    std::cerr << vk;
+                    first = false;
+                }
+            std::cerr << " (o prefijados fx.k=v)\n";
+            return 2;
+        }
+    }
 
     WavData wav;
     std::string err;
@@ -92,21 +177,36 @@ int cmd_render(int argc, char** argv) {
         return 3;
     }
     if (wav.channels > kMaxChannels) {
-        std::cerr << "ERROR: el sim v0.1 acepta 1 o 2 canales (archivo tiene "
+        std::cerr << "ERROR: el sim acepta 1 o 2 canales (archivo tiene "
                   << wav.channels << ")\n";
         return 3;
     }
 
-    suite_core::Fet76Ref::Params p;   // defaults; se sobreescriben con los k=v presentes
-    if (kv.count("thresh_db"))   p.thresh_db   = kv["thresh_db"];
-    if (kv.count("ratio"))       p.ratio       = kv["ratio"];
-    if (kv.count("attack_s"))    p.attack_s    = kv["attack_s"];
-    if (kv.count("release_s"))   p.release_s   = kv["release_s"];
-    if (kv.count("in_gain_db"))  p.in_gain_db  = kv["in_gain_db"];
-    if (kv.count("out_gain_db")) p.out_gain_db = kv["out_gain_db"];
+    // Parámetros por fx: defaults + k=v (sin prefijo = todos los fx que
+    // tengan la clave; con prefijo = solo ese fx).
+    suite_core::Fet76Ref::Params p76;
+    p76.in_gain_db  = kv_val(kv, "fet76", "in_gain_db",  p76.in_gain_db);
+    p76.thresh_db   = kv_val(kv, "fet76", "thresh_db",   p76.thresh_db);
+    p76.ratio       = kv_val(kv, "fet76", "ratio",       p76.ratio);
+    p76.attack_s    = kv_val(kv, "fet76", "attack_s",    p76.attack_s);
+    p76.release_s   = kv_val(kv, "fet76", "release_s",   p76.release_s);
+    p76.out_gain_db = kv_val(kv, "fet76", "out_gain_db", p76.out_gain_db);
+
+    suite_core::OptoCompRef::Params pop;
+    pop.thresh_db      = kv_val(kv, "opto", "thresh_db",      pop.thresh_db);
+    pop.ratio          = kv_val(kv, "opto", "ratio",          pop.ratio);
+    pop.knee_db        = kv_val(kv, "opto", "knee_db",        pop.knee_db);
+    pop.attack_s       = kv_val(kv, "opto", "attack_s",       pop.attack_s);
+    pop.release_fast_s = kv_val(kv, "opto", "release_fast_s", pop.release_fast_s);
+    pop.release_slow_s = kv_val(kv, "opto", "release_slow_s", pop.release_slow_s);
+    pop.gr_span_db     = kv_val(kv, "opto", "gr_span_db",     pop.gr_span_db);
+    pop.out_gain_db    = kv_val(kv, "opto", "out_gain_db",    pop.out_gain_db);
 
     Engine engine(double(wav.sample_rate), size_t(block));
-    engine.add_processor(std::make_unique<AdapterFet76>(p));
+    for (const std::string& fx : chain) {
+        if (fx == "fet76")      engine.add_processor(std::make_unique<AdapterFet76>(p76));
+        else if (fx == "opto")  engine.add_processor(std::make_unique<AdapterOpto>(pop));
+    }
 
     FileAudioSource src(wav);
     WavAudioSink sink(wav.sample_rate, 2);
@@ -122,7 +222,10 @@ int cmd_render(int argc, char** argv) {
 
     std::cout << "OK  " << report.frames_rendered << " marcos en "
               << report.blocks_rendered << " bloques | tiempo=" << report.wall_seconds
-              << "s | x" << report.realtime_factor << " realtime\n";
+              << "s | x" << report.realtime_factor << " realtime | cadena=";
+    for (size_t i = 0; i < chain.size(); ++i)
+        std::cout << (i ? "," : "") << chain[i];
+    std::cout << "\n";
     if (!report.warning.empty()) std::cout << "AVISO: " << report.warning << "\n";
     return 0;
 }

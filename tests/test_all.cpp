@@ -6,6 +6,7 @@
 #include "deluge_sim/engine.hpp"
 #include "deluge_sim/wav_io.hpp"
 #include "suite_core/fet76_ref.hpp"
+#include "suite_core/opto_comp.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -21,6 +22,7 @@ namespace {
 
 using namespace deluge_sim;
 using suite_core::Fet76Ref;
+using suite_core::OptoCompRef;
 
 int g_failures = 0;
 
@@ -46,6 +48,25 @@ public:
 
 private:
     Fet76Ref f_;
+};
+
+// Adaptador blanco del óptico (mismo patrón).
+class OptoAdapter : public IProcessor {
+public:
+    explicit OptoAdapter(const OptoCompRef::Params& p) { o_.set_params(p); }
+    const char* name() const override { return "opto_comp_ref"; }
+    void prepare(const ProcessContext& ctx) override {
+        o_.set_sample_rate(ctx.sample_rate);
+        o_.prepare();
+    }
+    void process(Block& b) override {
+        o_.process(b.L, b.channels == 1 ? nullptr : b.R, b.frames);
+    }
+    void reset() override { o_.reset(); }
+    OptoCompRef& ref() { return o_; }
+
+private:
+    OptoCompRef o_;
 };
 
 // Genera un seno estéreo intercalado con pico dado (frecuencia fija 1 kHz).
@@ -407,10 +428,216 @@ void test_board_pump_chain_bypass() {
           "44100 Hz vs reloj 48000 -> rechazo con mensaje");
 }
 
+// ---------------- pruebas opto_comp (referencia, v0.3) ---------------
+
+// Estabiliza el opto con una entrada DC (el detector converge EXACTO a
+// |x|) y devuelve la GR estacionaria y la salida final.
+struct OptoSteady {
+    double gr_db = 0.0;
+    double out = 0.0;
+};
+OptoSteady opto_steady_dc(double x, const OptoCompRef::Params& p) {
+    OptoCompRef o;
+    o.set_params(p);
+    o.set_sample_rate(48000);
+    o.prepare();
+    std::vector<float> L(14400, float(x)), R(14400, float(x));  // 0.3 s
+    o.process(L.data(), R.data(), L.size());
+    OptoSteady s;
+    s.gr_db = o.current_gr_db();
+    s.out = L.back();
+    return s;
+}
+
+void test_opto_gain_law_dc() {
+    std::cout << "[test] opto: ley de ganancia EXACTA con DC (rodilla + lineal)\n";
+    // Ley documentada (s = 1-1/R, w = knee):
+    //   e<=0: 0 | 0<e<=w: s*e^2/(2w) | e>w: s*(e-w/2)
+    OptoCompRef::Params p;                 // thresh=-12, ratio=4, knee=6
+    p.thresh_db = -12.0; p.ratio = 4.0; p.knee_db = 6.0;
+    const double s = 0.75, w = 6.0, th = -12.0;
+
+    // Caso A: en rodilla (e = 5.979 dB < w)
+    {
+        const double x = 0.5;
+        const double e = 20.0 * std::log10(x) - th;
+        const double gr_expect = s * e * e / (2.0 * w);
+        const OptoSteady m = opto_steady_dc(x, p);
+        check(std::fabs(m.gr_db + gr_expect) < 1e-3,
+              "GR en rodilla == ley (esperada " + std::to_string(gr_expect) +
+              ", medida " + std::to_string(-m.gr_db) + ")");
+        check(std::fabs(m.out - x * std::pow(10.0, -gr_expect / 20.0)) < 1e-3,
+              "salida == x*10^(-GR/20)");
+    }
+    // Caso B: EXACTAMENTE en la juntura rodilla/lineal (e = w): ambas ramas
+    //         dan lo mismo (continuidad C1).
+    {
+        const double x = std::pow(10.0, (th + w) / 20.0);
+        const double gr_expect = s * (w - 0.5 * w);
+        const OptoSteady m = opto_steady_dc(x, p);
+        check(std::fabs(m.gr_db + gr_expect) < 1e-3,
+              "GR en la juntura e=knee == s*knee/2 (esperada " +
+              std::to_string(gr_expect) + ")");
+    }
+    // Caso C: por encima de la rodilla (pendiente s = 1 - 1/R).
+    {
+        const double x = 0.7;
+        const double e = 20.0 * std::log10(x) - th;
+        const double gr_expect = s * (e - 0.5 * w);
+        const OptoSteady m = opto_steady_dc(x, p);
+        check(std::fabs(m.gr_db + gr_expect) < 1e-3,
+              "GR sobre rodilla == s*(e-w/2) (esperada " +
+              std::to_string(gr_expect) + ")");
+    }
+    // Caso D: bajo el umbral -> sin reduccion (salida == entrada).
+    {
+        const OptoSteady m = opto_steady_dc(0.1, p);
+        check(std::fabs(m.gr_db) < 1e-9 && std::fabs(m.out - 0.1) < 1e-6,
+              "bajo umbral: GR = 0 y salida == entrada");
+    }
+}
+
+void test_opto_attack_ballistics() {
+    std::cout << "[test] opto: attack ~2 tau hasta el 63% de la GR final\n";
+    // Con ley cuadratica en rodilla, el 63.2% de la GR final ocurre en
+    // f_env = 0.868 => t = -tau*ln(1-0.868) ~= 2.02 tau (tau = attack_s).
+    OptoCompRef o;
+    OptoCompRef::Params p;
+    p.thresh_db = -12.0; p.ratio = 4.0; p.knee_db = 6.0; p.attack_s = 0.010;
+    o.set_params(p);
+    o.set_sample_rate(48000);
+    o.prepare();
+    const double gr_final = 2.2346;             // de la ley (caso A anterior)
+    size_t t63 = 0, onset = 0;
+    float v = 0.0f;
+    std::vector<float> one(1);
+    for (size_t i = 0; i < 24000; ++i) {        // 0.5 s
+        v = (i < 9600) ? 0.0f : 0.5f;           // silencio 0.2 s, luego DC
+        if (onset == 0 && i >= 9600) onset = i;
+        one[0] = v;
+        o.process(one.data(), nullptr, 1);
+        if (onset != 0 && t63 == 0 && o.current_gr_db() <= -0.632 * gr_final) {
+            t63 = i - onset + 1;
+        }
+    }
+    check(std::fabs(o.current_gr_db() + gr_final) < 0.05 * gr_final,
+          "GR final convergida a la ley (medida " +
+          std::to_string(-o.current_gr_db()) + ")");
+    const double t63_ms = double(t63) / 48.0;
+    check(t63_ms > 10.0 && t63_ms < 40.0,
+          "tiempo al 63% ~ 2 tau = 20 ms (medido " + std::to_string(t63_ms) + " ms)");
+}
+
+void test_opto_release_program_dependent() {
+    std::cout << "[test] opto: release program-dependent (GR profunda despeja mas lento)\n";
+    // tau_release interpola de release_slow (GR->0) a release_fast
+    // (|GR| >= gr_span_db). La cola larga es la firma del opto.
+    auto recovery_ms = [&](double x, double gr_at_release) {
+        OptoCompRef o;
+        OptoCompRef::Params p;
+        p.thresh_db = -12.0; p.ratio = 4.0; p.knee_db = 6.0;
+        p.release_fast_s = 0.08; p.release_slow_s = 0.60; p.gr_span_db = 10.0;
+        o.set_params(p);
+        o.set_sample_rate(48000);
+        o.prepare();
+        std::vector<float> loud(14400, float(x));           // 0.3 s fuertes
+        o.process(loud.data(), nullptr, loud.size());
+        if (std::fabs(o.current_gr_db() + gr_at_release) > 0.15 * gr_at_release) {
+            return -1.0;                                    // GR no convergio
+        }
+        std::vector<float> quiet(96000, 0.001f);            // 2 s de despeje
+        size_t t = 0;
+        std::vector<float> one(1);
+        for (size_t i = 0; i < quiet.size(); ++i) {
+            one[0] = quiet[i];
+            o.process(one.data(), nullptr, 1);
+            if (o.current_gr_db() > -1.0) { t = i + 1; break; }
+        }
+        return double(t) / 48.0;
+    };
+    // GR profunda: x=0.9 -> e=11.08 dB -> GR = s*(e-w/2) = 6.06 dB.
+    // GR somera:  x=0.5 -> e=5.98 dB -> GR = 2.23 dB (rodilla).
+    // tau efectivo inicial con depth=0.606: interpolando coeficientes
+    // (1/tau) da ~121 ms; crece hacia 600 ms al despejar -> el tiempo
+    // medido a -1 dB queda en ~150-200 ms, muy por encima del tau fast.
+    const double deep = recovery_ms(0.9, 6.0636);
+    const double shallow = recovery_ms(0.5, 2.2346);
+    check(deep > 0 && deep > 100.0 && deep < 400.0,
+          "despeje profundo a -1 dB en banda [100,400] ms (medido " +
+          std::to_string(deep) + " ms)");
+    check(shallow > 0 && shallow < 300.0,
+          "despeje somero a -1 dB tarda < 300 ms (medido " +
+          std::to_string(shallow) + " ms)");
+    check(deep > shallow * 1.5,
+          "GR profunda despeja claramente mas lento (program-dependent, "
+          "razon > 1.5; medido razon " + std::to_string(deep / shallow) + ")");
+}
+
+void test_opto_nonfinite() {
+    std::cout << "[test] opto: NaN/Inf -> salida finita y contador\n";
+    OptoCompRef o;
+    o.set_sample_rate(48000);
+    o.prepare();
+    std::vector<float> L{0.5f, std::numeric_limits<float>::quiet_NaN(),
+                         0.25f, std::numeric_limits<float>::infinity(), -0.5f};
+    std::vector<float> R = L;
+    o.process(L.data(), R.data(), L.size());
+    bool all_finite = true;
+    for (float v : L) all_finite = all_finite && std::isfinite(v);
+    for (float v : R) all_finite = all_finite && std::isfinite(v);
+    check(all_finite, "todas las salidas finitas");
+    check(o.bad_input_count() == 4, "contador de entradas no finitas == 4");
+}
+
+void test_opto_mono() {
+    std::cout << "[test] opto: camino mono (R = nullptr)\n";
+    OptoCompRef o;
+    o.set_sample_rate(48000);
+    o.prepare();
+    std::vector<float> L(4800);
+    for (size_t i = 0; i < L.size(); ++i)
+        L[i] = float(0.5 * std::sin(2.0 * 3.14159265358979323846 * 1000.0 *
+                                    double(i) / 48000.0));
+    o.process(L.data(), nullptr, L.size());
+    bool finite = true;
+    for (float v : L) finite = finite && std::isfinite(v);
+    check(finite, "salida mono finita");
+}
+
+void test_engine_chain_fet_opto() {
+    std::cout << "[test] engine cadena [fet76, opto]: orden de insercion y finita\n";
+    WavData in = make_sine(48000, 48000, 0.5);
+    Engine engine(48000.0, 512);
+    auto fet = std::make_unique<FetAdapter>(Fet76Ref::Params{});    // thresh -18
+    OptoCompRef::Params pop;                     // thresh -12 por defecto
+    pop.thresh_db = -24.0;                       // el fet76 ya aplasta la señal
+    auto opto = std::make_unique<OptoAdapter>(pop);   // (el opto ve ~-14 dB)
+    FetAdapter* fet_p = fet.get();               // telemetría tras la corrida
+    OptoAdapter* opto_p = opto.get();
+    engine.add_processor(std::move(fet));        // orden de inserción: fet -> opto
+    engine.add_processor(std::move(opto));
+    FileAudioSource src(in);
+    WavAudioSink sink(48000, 2);
+    RunReport rep;
+    std::string err;
+    check(engine.run(src, sink, rep, err), "corrida de la cadena completa");
+    check(rep.frames_rendered == 48000, "marcos preservados (48000)");
+    check(engine.processor_count() == 2, "cadena con 2 procesadores");
+    // ambos compresores deben haber actuado (telemetria < 0 dB):
+    check(fet_p->ref().current_gr_db() < -0.5 && opto_p->ref().current_gr_db() < -0.5,
+          "GR de ambos eslabones activa (fet " +
+          std::to_string(fet_p->ref().current_gr_db()) + ", opto " +
+          std::to_string(opto_p->ref().current_gr_db()) + ")");
+    // salida finita y comprimida: pico <= pico de entrada
+    check(sink.finalize((std::filesystem::temp_directory_path() /
+                         "deluge_sim_test_chain.wav").string(), err),
+          "sumidero escribe WAV de la cadena");
+}
+
 } // namespace
 
 int main() {
-    std::cout << "deluge-sim :: simtests v0.2\n";
+    std::cout << "deluge-sim :: simtests v0.3\n";
     test_wav_roundtrip();
     test_fet76_no_gr();
     test_fet76_gr_steady();
@@ -424,6 +651,12 @@ int main() {
     test_board_clock();
     test_board_pump_cadence();
     test_board_pump_chain_bypass();
+    test_opto_gain_law_dc();
+    test_opto_attack_ballistics();
+    test_opto_release_program_dependent();
+    test_opto_nonfinite();
+    test_opto_mono();
+    test_engine_chain_fet_opto();
     if (g_failures == 0) {
         std::cout << "RESULTADO: TODO OK\n";
         return 0;
