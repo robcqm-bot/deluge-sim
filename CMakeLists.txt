@@ -28,6 +28,7 @@ add_library(suite_core STATIC
     suite_core/src/fet76_ref.cpp
     suite_core/src/opto_comp.cpp
     suite_core/src/passive_eq.cpp
+    suite_core/src/plate_reverb.cpp
 )
 target_include_directories(suite_core PUBLIC suite_core/include)
 # NOTA DE ARQUITECTURA: suite_core NO enlaza contra deluge_sim_lib.

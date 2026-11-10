@@ -1,4 +1,4 @@
-# ARCHITECTURE.md — deluge-sim v0.4
+# ARCHITECTURE.md — deluge-sim v0.5
 
 > (Documento de arquitectura en español — traducciones al inglés bienvenidas.)
 
@@ -11,7 +11,7 @@
 | **Strategy** | `IProcessor` | Cada FX (Fet76Ref hoy, PLATE-140 mañana) es intercambiable sin tocar el motor |
 | **Pipeline** | `Engine::run` / `BoardPump::pump` | Render por bloques: fuente → cadena ordenada → sumidero; espejo del flujo real del firmware Deluge (blocks → FX → master) |
 | **Firewall (module boundary)** | `suite_core/` vs `include/deluge_sim/` | Dos bibliotecas estáticas INDEPENDIENTES; la dependencia va en una sola dirección (`app → ambas`). Ningún header cruza la frontera. El único puente es un adaptador de ~30 líneas (`AdapterFet76` en `app/adapter_fet76.hpp`) |
-| **Adapter** | `AdapterFet76`, `AdapterOpto`, `AdapterPassiveEQ` | Traduce `deluge_sim::Block` (tipo del sim) → punteros crudos `float*` (tipo de suite-core). En la integración real al firmware estos archivos viven en `src/deluge/dsp/suite/`. Compartidos por simcli y boardsim (headers `app/adapter_*.hpp`) |
+| **Adapter** | `AdapterFet76`, `AdapterOpto`, `AdapterPassiveEQ`, `AdapterPlateReverb` | Traduce `deluge_sim::Block` (tipo del sim) → punteros crudos `float*` (tipo de suite-core). En la integración real al firmware estos archivos viven en `src/deluge/dsp/suite/`. Compartidos por simcli y boardsim (headers `app/adapter_*.hpp`) |
 | **DTO + Report** | `RunReport` | Telemetría explícita en vez de prints dispersos |
 | **Facade + composición** | `BoardPump` (v0.2) | El lazo interactivo del board REUSA `FileAudioSource`, `IProcessor` y la guardia del engine en vez de duplicar el pipeline: solo cambia el modo de conducción (cadencia fija a demanda vs batch completo) |
 
@@ -41,20 +41,23 @@ deluge-sim\
 │   ├── include\suite_core\fet76_ref.hpp  # compresor FET feedback
 │   ├── include\suite_core\opto_comp.hpp  # compresor óptico (v0.3)
 │   ├── include\suite_core\passive_eq.hpp # EQ pasivo de programa (v0.4)
+│   ├── include\suite_core\plate_reverb.hpp # reverb placa FDN (v0.5)
 │   └── src\fet76_ref.cpp
 │   └── src\opto_comp.cpp
 │   └── src\passive_eq.cpp
+│   └── src\plate_reverb.cpp
 ├── app\
 │   ├── adapter_fet76.hpp                 # adaptador fet76 (el puente)
 │   ├── adapter_opto.hpp                  # adaptador opto (v0.3)
 │   ├── adapter_eq.hpp                    # adaptador EQ pasivo (v0.4)
+│   ├── adapter_plate.hpp                 # adaptador reverb (v0.5)
 │   ├── main.cpp                          # simcli (--chain desde v0.3)
 │   └── board_sim\                        # <<< fase 2 (v0.2)
 │       ├── board_clock.hpp               # stubs de reloj (48 kHz, bloque 128)
 │       ├── board_core.hpp/.cpp           # SdCard + PadGrid + BoardPump (SDL-free)
 │       └── board_main.cpp                # boardsim: ÚNICO archivo que enlaza SDL2
 └── tests\
-    └── test_all.cpp                      # simtests (exit 0 = aceptación, 25 pruebas)
+    └── test_all.cpp                      # simtests (exit 0 = aceptación, 31 pruebas)
 ```
 
 ## 3. Data Flow
@@ -133,7 +136,7 @@ en cada corrida — es el indicador de regresión de rendimiento del proyecto.
 - Preferido: `cmake -B build -A x64 && cmake --build build --config Release`
   → `build\Release\simtests.exe` + `simcli.exe`
 - Alternativa (MinGW/g++): `./build.sh run`
-- Puerta de aceptación: `simtests` exit 0 (25 pruebas con expectativa matemática)
+- Puerta de aceptación: `simtests` exit 0 (31 pruebas con expectativa matemática)
 - **board_sim (opcional)**: pasa `-DSDL2_SDK_DIR=<SDK>/x86_64-w64-mingw32`
   (SDK oficial MinGW de libsdl-org; la DLL se copia junto al exe) o instala
   `libsdl2-dev` (Linux, find_package). Sin SDL2 el target se omite con un
@@ -197,6 +200,7 @@ matemática que `simtests` verifica.
 | `Fet76Ref` | FET de realimentación (detector = salida de la celda, muestra previa) | curva feedback: out_peak = (in_peak + k·thresh)/(1+k), k = 1−1/R |
 | `OptoCompRef` | fotocélula: detector = envolvente one-pole ASIMÉTRICA de max(\|L\|,\|R\|) | rodilla suave C1 sobre el exceso e: `e≤0: 0 · 0<e≤w: s·e²/(2w) · e>w: s·(e−w/2)`, s = 1−1/R, w = knee_db |
 | `PassiveEQRef` | EQ pasivo de programa: dos biquad RBJ peaking en cascada | refuerzo exacto +boost_db en f0; recorte −cut_db en 2.5·f0 (kCutFreqRatio); el TRUCO (boost+cut a la misma frecuencia) emerge del producto: pico en f0 con dip encima. `magnitude_db()` expone \|H(e^jw)\| EXACTA de la cascada |
+| `PlateReverbRef` | placa: FDN de 8 líneas, damping one-pole por línea, matriz de Hadamard normalizada (ortogonal), predelay, difusor de entrada (3 allpass), LFOs por línea | g_i = 10^(−3·t_i/RT60) ⇒ CADA línea decae 10^(−3t/RT60) por unidad de tiempo ⇒ RT60 de la cola == decay_s exacto en graves; damping recorta HF una vez por vuelta (fc log-escala 20 kHz→800 Hz) |
 
 **OptoCompRef, decisiones documentadas:**
 
@@ -229,3 +233,23 @@ matemática que `simtests` verifica.
 5. **Costo por muestra**: 2 biquads TDF2 por canal — aritmética escalar pura,
    sin funciones trascendentes en el lazo de render (todo queda en los
    coeficientes).
+
+**PlateReverbRef, decisiones documentadas:**
+
+1. **Matriz ortogonal (Hadamard/√8)**: conserva la energía del lazo — la
+   estabilidad queda garantizada por max_i g_i < 1 (medido: ruido a wet
+   100% con pico < 2.1).
+2. **RT60 EXACTO por construcción**: g_i = 10^(−3·t_i/decay_s) hace que
+   todas las líneas compartan la misma tasa de decaimiento — el test mide
+   la cola del impulso por regresión de envolvente y obtiene 2.38 s para
+   un objetivo de 2.4 s (0.8% de error).
+3. **Damping una vez por vuelta**: el one-pole del lajo multiplica |H(ω)|
+   cada t_i (≈67 ms medios) — el test HF/LF verifica RT60(6 kHz) ≈ 0.57 s
+   vs RT60(200 Hz) ≈ 2.42 s con damp 50% (predicho 0.62 s analíticamente).
+4. **Bypass y predelay EXACTOS**: mix 0% ⇒ salida == entrada bit a bit;
+   wet 100% ⇒ salida exactamente 0 hasta predelay + primera línea.
+5. **Determinismo con modulación**: fases LFO fijas por reset — dos
+   corridas idénticas son bit-idénticas CON o SIN modulación.
+6. **Costo por muestra**: 8 lecturas interpoladas + 8 one-pole + WHT de 3
+   etapas (sin multiplicaciones complejas) + 8 sin() de LFO — ×38 realtime
+   en el CLI (el FX más caro de la suite, aún lejos de tiempo real).

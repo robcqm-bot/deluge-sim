@@ -16,6 +16,7 @@
 #include "adapter_eq.hpp"
 #include "adapter_fet76.hpp"
 #include "adapter_opto.hpp"
+#include "adapter_plate.hpp"
 #include "deluge_sim/engine.hpp"
 #include "deluge_sim/wav_io.hpp"
 
@@ -42,21 +43,25 @@ const std::map<std::string, std::vector<const char*>>& fx_keys() {
                    "out_gain_db"}},
         {"eq",    {"freq_hz", "boost_db", "cut_db", "q_boost", "q_cut",
                    "trim_db"}},
+        {"plate", {"decay_s", "damp_pct", "predelay_ms", "mod_rate_hz",
+                   "mod_depth_ms", "mix_pct", "out_gain_db"}},
     };
     return m;
 }
 
 void print_usage() {
     std::cout <<
-        "deluge-sim v0.4 (offline DSP harness + board simulator)\n"
+        "deluge-sim v0.5 (offline DSP harness + board simulator)\n"
         "Uso:\n"
-        "  simcli render --in ENTRADA.wav --out SALIDA.wav [--chain fet76,opto,eq]"
+        "  simcli render --in ENTRADA.wav --out SALIDA.wav [--chain fet76,opto,eq,plate]"
         " [k=v ...] [--block N]\n"
         "    --chain: fx en orden de inserción (default fet76)\n"
         "    k fet76: in_gain_db thresh_db ratio attack_s release_s out_gain_db\n"
         "    k opto:  thresh_db ratio knee_db attack_s release_fast_s"
         " release_slow_s gr_span_db out_gain_db\n"
         "    k eq:    freq_hz boost_db cut_db q_boost q_cut trim_db\n"
+        "    k plate: decay_s damp_pct predelay_ms mod_rate_hz mod_depth_ms"
+        " mix_pct out_gain_db\n"
         "    prefijo por fx: fet76.ratio=8 opto.knee_db=3\n"
         "  simcli help\n";
 }
@@ -130,7 +135,7 @@ int cmd_render(int argc, char** argv) {
                 item = item.substr(b, e - b + 1);
                 if (fx_keys().count(item) == 0) {
                     std::cerr << "ERROR: fx desconocido en --chain: '" << item
-                              << "' (válidos: fet76 opto eq)\n";
+                              << "' (válidos: fet76 opto eq plate)\n";
                     return 2;
                 }
                 chain.push_back(item);
@@ -214,11 +219,21 @@ int cmd_render(int argc, char** argv) {
     peq.q_cut    = kv_val(kv, "eq", "q_cut",    peq.q_cut);
     peq.trim_db  = kv_val(kv, "eq", "trim_db",  peq.trim_db);
 
+    suite_core::PlateReverbRef::Params pplate;
+    pplate.decay_s      = kv_val(kv, "plate", "decay_s",      pplate.decay_s);
+    pplate.damp_pct     = kv_val(kv, "plate", "damp_pct",     pplate.damp_pct);
+    pplate.predelay_ms  = kv_val(kv, "plate", "predelay_ms",  pplate.predelay_ms);
+    pplate.mod_rate_hz  = kv_val(kv, "plate", "mod_rate_hz",  pplate.mod_rate_hz);
+    pplate.mod_depth_ms = kv_val(kv, "plate", "mod_depth_ms", pplate.mod_depth_ms);
+    pplate.mix_pct      = kv_val(kv, "plate", "mix_pct",      pplate.mix_pct);
+    pplate.out_gain_db  = kv_val(kv, "plate", "out_gain_db",  pplate.out_gain_db);
+
     Engine engine(double(wav.sample_rate), size_t(block));
     for (const std::string& fx : chain) {
         if (fx == "fet76")      engine.add_processor(std::make_unique<AdapterFet76>(p76));
         else if (fx == "opto")  engine.add_processor(std::make_unique<AdapterOpto>(pop));
         else if (fx == "eq")    engine.add_processor(std::make_unique<AdapterPassiveEQ>(peq));
+        else if (fx == "plate") engine.add_processor(std::make_unique<AdapterPlateReverb>(pplate));
     }
 
     FileAudioSource src(wav);

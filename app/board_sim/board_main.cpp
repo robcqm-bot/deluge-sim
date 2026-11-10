@@ -48,7 +48,7 @@ constexpr int kQueueBlocks = 8;          // bloques hardware de cola (~21 ms)
 
 void print_usage() {
     std::cout <<
-        "deluge-sim boardsim v0.4 (simulador de placa)\n"
+        "deluge-sim boardsim v0.5 (simulador de placa)\n"
         "Uso:\n"
         "  boardsim --sd CARPETA [--song N] [--hw-block N] [--list] [k=v ...]\n"
         "    k: thresh_db ratio attack_s release_s in_gain_db out_gain_db\n"
@@ -213,7 +213,7 @@ int run_board(int argc, char** argv) {
         return 3;
     }
 
-    SDL_Window* win = SDL_CreateWindow("deluge-sim board v0.4",
+    SDL_Window* win = SDL_CreateWindow("deluge-sim board v0.5",
                                        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                        kWindowW, kWindowH, 0);
     SDL_Renderer* ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);

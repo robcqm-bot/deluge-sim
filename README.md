@@ -25,14 +25,20 @@ and program-dependent release.
 passive-EQ boost/cut trick; its full magnitude response is exposed as an
 exact analytic `magnitude_db()`.
 
+**v0.5 — plate reverb**: fourth reference processor `PlateReverbRef` — a
+modulated 8-line FDN with Hadamard feedback matrix, per-line RT60 gains
+(every line decays at exactly `decay_s`), loop damping, predelay, input
+diffusion and stereo-decorrelated tap groups.
+
 - ✅ Working reference processors: `Fet76Ref` (textbook FET-style feedback
   compressor, stereo-linked, one-pole ballistics), `OptoCompRef`
   (opto-cell compressor with soft-knee gain law, slow photoresistor
-  attack and program-dependent release) and `PassiveEQRef` (passive-style
-  program EQ with the boost/cut trick)
+  attack and program-dependent release), `PassiveEQRef` (passive-style
+  program EQ with the boost/cut trick) and `PlateReverbRef` (modulated
+  FDN plate reverb)
 - ✅ Dependency-free RIFF/WAV reader & writer (PCM16/24/32, float32,
   WAVE_FORMAT_EXTENSIBLE)
-- ✅ Test suite with mathematically documented expectations (25 cases)
+- ✅ Test suite with mathematically documented expectations (31 cases)
 - ✅ Clean module boundary ("firewall") between the host framework and
   your DSP code — see below
 
@@ -95,12 +101,12 @@ cmake --build build --config Release   # SDL2.dll is copied next to the exe
 ## Usage
 
 ```bash
-# run the acceptance tests (25 cases, mathematically documented)
+# run the acceptance tests (31 cases, mathematically documented)
 build/simtests.exe
 
 # render a file through a chain of reference processors
 build/simcli.exe render --in input.wav --out output.wav \
-    --chain eq,fet76,opto freq_hz=120 boost_db=6 cut_db=4 ratio=8
+    --chain eq,plate freq_hz=150 boost_db=3 decay_s=3.2 damp_pct=45
 
 # per-fx parameters (unprefixed keys apply to every fx that has them)
 build/simcli.exe render --in in.wav --out out.wav --chain fet76,opto \
@@ -110,6 +116,8 @@ build/simcli.exe render --in in.wav --out out.wav --chain fet76,opto \
 # opto keys:  thresh_db ratio knee_db attack_s release_fast_s
 #             release_slow_s gr_span_db out_gain_db
 # eq keys:    freq_hz boost_db cut_db q_boost q_cut trim_db
+# plate keys: decay_s damp_pct predelay_ms mod_rate_hz mod_depth_ms
+#             mix_pct out_gain_db
 # --block N   (frames per render block, 8..65536)
 ```
 
@@ -155,8 +163,8 @@ See [TODO.md](TODO.md). Highlights:
    SDL2). Next steps for it: preset/clip persistence on the "SD card" and
    a song-browsing UI.
 2. ~~More reference processors (opto-style...)~~ **opto shipped in v0.3**,
-   **passive EQ with boost/cut trick shipped in v0.4**. Next: plate-style
-   FDN reverb, tape-style saturation — all behind the same `IProcessor`
+   **passive EQ with boost/cut trick shipped in v0.4**, **plate FDN reverb
+   shipped in v0.5**. Next: tape-style saturation — same `IProcessor`
    contract.
 3. Streaming file source for very long renders.
 4. Preset import/export.

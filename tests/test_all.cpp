@@ -8,6 +8,7 @@
 #include "suite_core/fet76_ref.hpp"
 #include "suite_core/opto_comp.hpp"
 #include "suite_core/passive_eq.hpp"
+#include "suite_core/plate_reverb.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -25,6 +26,7 @@ using namespace deluge_sim;
 using suite_core::Fet76Ref;
 using suite_core::OptoCompRef;
 using suite_core::PassiveEQRef;
+using suite_core::PlateReverbRef;
 
 int g_failures = 0;
 
@@ -88,6 +90,24 @@ public:
 
 private:
     PassiveEQRef e_;
+};
+
+// Adaptador blanco de la reverb de placa (mismo patrón).
+class PlateAdapter : public IProcessor {
+public:
+    explicit PlateAdapter(const PlateReverbRef::Params& p) { r_.set_params(p); }
+    const char* name() const override { return "plate_reverb"; }
+    void prepare(const ProcessContext& ctx) override {
+        r_.set_sample_rate(ctx.sample_rate);
+        r_.prepare();
+    }
+    void process(Block& b) override {
+        r_.process(b.L, b.channels == 1 ? nullptr : b.R, b.frames);
+    }
+    void reset() override { r_.reset(); }
+
+private:
+    PlateReverbRef r_;
 };
 
 // Genera un seno estéreo intercalado con pico dado (frecuencia fija 1 kHz).
@@ -834,10 +854,286 @@ void test_engine_chain_eq() {
     check(finite, "salida de la cadena finita");
 }
 
+// ---------------- pruebas plate_reverb (referencia, v0.5) -------------
+
+// RT60 medido por regresión lineal sobre la envolvente de energía (bloques
+// de 50 ms) en la banda relativa [lo_db, hi_db] bajo el bloque máximo.
+double plate_measure_rt60(const PlateReverbRef::Params& p, double lo_db,
+                          double hi_db, double seconds = 10.0) {
+    PlateReverbRef r;
+    r.set_params(p);
+    r.set_sample_rate(48000);
+    r.prepare();
+    const size_t n = size_t(48000.0 * seconds);
+    std::vector<float> L(n, 0.0f), R(n, 0.0f);
+    L[0] = 1.0f;
+    R[0] = 1.0f;
+    r.process(L.data(), R.data(), n);
+    const size_t blk = 2400;                             // 50 ms
+    std::vector<double> t, db;
+    double max_db = -1e9;
+    std::vector<double> raw;
+    for (size_t b = 0; b + blk <= n; b += blk) {
+        double acc = 0.0;
+        for (size_t i = b; i < b + blk; ++i) acc += double(L[i]) * double(L[i]);
+        const double rms = std::sqrt(acc / double(blk));
+        const double d = 20.0 * std::log10(std::max(rms, 1e-12));
+        raw.push_back(d);
+        if (d > max_db) max_db = d;
+    }
+    for (size_t k = 0; k < raw.size(); ++k) {
+        if (raw[k] <= max_db - hi_db && raw[k] >= max_db - lo_db) {
+            t.push_back(double(k) * 0.05 + 0.025);       // centro del bloque
+            db.push_back(raw[k]);
+        }
+    }
+    if (t.size() < 4) return -1.0;                       // banda sin datos
+    // regresión lineal db = a + m·t
+    double st = 0, sd = 0, stt = 0, sdt = 0;
+    for (size_t k = 0; k < t.size(); ++k) {
+        st += t[k]; sd += db[k];
+        stt += t[k] * t[k]; sdt += t[k] * db[k];
+    }
+    const double m = (sdt - st * sd / double(t.size())) /
+                     (stt - st * st / double(t.size()));
+    return (m < -1e-9) ? 60.0 / (-m) : -1.0;
+}
+
+void test_plate_rt60() {
+    std::cout << "[test] plate: RT60 medido por impulso == decay_s (±20%)\n";
+    PlateReverbRef::Params p;
+    p.decay_s = 2.4;
+    p.damp_pct = 30.0;
+    p.mix_pct = 100.0;
+    const double rt60 = plate_measure_rt60(p, 50.0, 30.0);
+    check(rt60 > 1.92 && rt60 < 2.88,
+          "RT60 medido en banda [1.92, 2.88] s (medido " +
+          std::to_string(rt60) + " s, objetivo 2.4)");
+}
+
+void test_plate_damping_hf() {
+    std::cout << "[test] plate: damping — la cola a 6 kHz decae más rápido "
+                 "que a 200 Hz\n";
+    // fc(damp 50%) = 4 kHz: |H| a 6 kHz ≈ 0.57 por vuelta (-4.9 dB/67 ms)
+    // => RT60_hf ~ 0.6 s vs RT60_lf ~ decay_s.
+    auto burst_rt60 = [&](double freq) {
+        PlateReverbRef r;
+        PlateReverbRef::Params p;
+        p.decay_s = 2.4;
+        p.damp_pct = 50.0;
+        p.mix_pct = 100.0;
+        p.predelay_ms = 5.0;
+        r.set_params(p);
+        r.set_sample_rate(48000);
+        r.prepare();
+        const uint32_t sr = 48000;
+        const size_t burst = size_t(0.4 * sr);
+        const size_t tail = size_t(5.0 * sr);
+        std::vector<float> L(burst + tail, 0.0f), R = L;
+        for (size_t i = 0; i < burst; ++i)
+            L[i] = R[i] = float(0.5 * std::sin(2.0 * 3.14159265358979323846 *
+                                               freq * double(i) / double(sr)));
+        r.process(L.data(), R.data(), L.size());
+        // envolvente RMS por bloques de 50 ms desde el fin del burst
+        const size_t blk = 2400;
+        std::vector<double> t, db;
+        double max_db = -1e9;
+        std::vector<double> raw;
+        for (size_t b = burst; b + blk <= burst + tail; b += blk) {
+            double acc = 0.0;
+            for (size_t i = b; i < b + blk; ++i)
+                acc += double(L[i]) * double(L[i]);
+            const double d = 20.0 * std::log10(std::max(std::sqrt(acc / blk), 1e-12));
+            raw.push_back(d);
+            if (d > max_db) max_db = d;
+        }
+        for (size_t k = 0; k < raw.size(); ++k)
+            if (raw[k] <= max_db - 10.0 && raw[k] >= max_db - 35.0) {
+                t.push_back(double(k) * 0.05 + 0.025);
+                db.push_back(raw[k]);
+            }
+        if (t.size() < 3) return -1.0;
+        double st = 0, sd = 0, stt = 0, sdt = 0;
+        for (size_t k = 0; k < t.size(); ++k) {
+            st += t[k]; sd += db[k];
+            stt += t[k] * t[k]; sdt += t[k] * db[k];
+        }
+        const double m = (sdt - st * sd / double(t.size())) /
+                         (stt - st * st / double(t.size()));
+        return (m < -1e-9) ? 60.0 / (-m) : -1.0;
+    };
+    const double lf = burst_rt60(200.0);
+    const double hf = burst_rt60(6000.0);
+    check(lf > 1.68 && lf < 3.12,
+          "RT60 a 200 Hz ~ decay_s (medido " + std::to_string(lf) + " s)");
+    check(hf > 0.0 && hf < 0.8 * lf,
+          "RT60 a 6 kHz < 0.8x el de 200 Hz (medido " +
+          std::to_string(hf) + " s)");
+}
+
+void test_plate_dry_and_predelay() {
+    std::cout << "[test] plate: bypass bit-exacto (mix 0) y silencio exacto "
+                 "antes de predelay+colas (wet 100)\n";
+    // mix 0: salida == entrada bit a bit
+    PlateReverbRef r;
+    PlateReverbRef::Params p;
+    p.mix_pct = 0.0;
+    r.set_params(p);
+    r.set_sample_rate(48000);
+    r.prepare();
+    std::vector<float> L(4800), R(4800);
+    for (size_t i = 0; i < L.size(); ++i) {
+        L[i] = float(0.4 * std::sin(2.0 * 3.14159265358979323846 * 500.0 *
+                                    double(i) / 48000.0));
+        R[i] = float(0.3 * std::cos(2.0 * 3.14159265358979323846 * 700.0 *
+                                    double(i) / 48000.0));
+    }
+    std::vector<float> Lin = L, Rin = R;
+    r.process(L.data(), R.data(), L.size());
+    bool exact = true;
+    for (size_t i = 0; i < L.size(); ++i)
+        if (L[i] != Lin[i] || R[i] != Rin[i]) { exact = false; break; }
+    check(exact, "mix 0%: salida == entrada bit a bit");
+    // wet 100 + predelay 20 ms: los primeros 2000 muestreos son 0.0 exactos
+    PlateReverbRef w;
+    PlateReverbRef::Params pw;
+    pw.mix_pct = 100.0;
+    pw.predelay_ms = 20.0;
+    w.set_params(pw);
+    w.set_sample_rate(48000);
+    w.prepare();
+    std::vector<float> W(4800, 0.0f), WR(4800, 0.0f);
+    W[0] = 1.0f; WR[0] = 1.0f;                            // impulso
+    w.process(W.data(), WR.data(), W.size());
+    bool silent = true;
+    for (size_t i = 0; i < 2000; ++i)
+        if (W[i] != 0.0f || WR[i] != 0.0f) { silent = false; break; }
+    check(silent, "wet 100%: exactamente 0 antes de predelay+primera línea");
+    bool nonzero = false;
+    for (size_t i = 3000; i < W.size(); ++i)
+        if (W[i] != 0.0f) { nonzero = true; break; }
+    check(nonzero, "la cola mojada llega (energía tras 3000 muestras)");
+}
+
+void test_plate_determinism_mod() {
+    std::cout << "[test] plate: determinismo (LFO fijo) y modulación activa\n";
+    auto run = [&](double depth_ms) {
+        PlateReverbRef r;
+        PlateReverbRef::Params p;
+        p.mix_pct = 100.0;
+        p.mod_depth_ms = depth_ms;
+        p.mod_rate_hz = 0.73;
+        p.predelay_ms = 5.0;
+        r.set_params(p);
+        r.set_sample_rate(48000);
+        r.prepare();
+        std::vector<float> L(24000, 0.0f), R(24000, 0.0f);
+        L[0] = R[0] = 1.0f;
+        r.process(L.data(), R.data(), L.size());
+        return L;
+    };
+    const std::vector<float> a = run(0.0);
+    const std::vector<float> a2 = run(0.0);
+    const std::vector<float> b = run(0.8);
+    const std::vector<float> b2 = run(0.8);
+    bool a_eq = true, b_eq = true, differs = false;
+    for (size_t i = 0; i < a.size(); ++i) {
+        a_eq = a_eq && (a[i] == a2[i]);
+        b_eq = b_eq && (b[i] == b2[i]);
+        if (a[i] != b[i]) differs = true;
+    }
+    check(a_eq, "mod 0: dos corridas bit-identicas (LTI determinista)");
+    check(b_eq, "mod 0.8 ms: dos corridas bit-identicas (LFO determinista)");
+    check(differs, "mod 0.8 ms cambia la cola vs mod 0 (modos sembrados)");
+}
+
+void test_plate_stability_nonfinite_mono() {
+    std::cout << "[test] plate: estabilidad con ruido, NaN/Inf y camino mono\n";
+    // ruido blanco 2 s a plena mezcla: finito y acotado
+    PlateReverbRef r;
+    PlateReverbRef::Params p;
+    p.mix_pct = 100.0;
+    p.decay_s = 1.5;
+    r.set_params(p);
+    r.set_sample_rate(48000);
+    r.prepare();
+    uint32_t rng = 0x12345678u;
+    std::vector<float> L(96000), R(96000);
+    for (size_t i = 0; i < L.size(); ++i) {
+        rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+        const float v = float((double(rng) / 4294967295.0) * 2.0 - 1.0) * 0.5f;
+        L[i] = v;
+        R[i] = v;
+    }
+    r.process(L.data(), R.data(), L.size());
+    bool finite = true;
+    double peak = 0.0;
+    for (float v : L) {
+        finite = finite && std::isfinite(v);
+        peak = std::max(peak, double(std::fabs(v)));
+    }
+    check(finite && peak < 3.0,
+          "ruido a wet 100%: finito y pico < 3 (medido " +
+          std::to_string(peak) + ")");
+    // NaN/Inf
+    PlateReverbRef n;
+    n.set_sample_rate(48000);
+    n.prepare();
+    std::vector<float> NL{0.5f, std::numeric_limits<float>::quiet_NaN(),
+                          0.25f, std::numeric_limits<float>::infinity(), -0.5f};
+    std::vector<float> NR = NL;
+    n.process(NL.data(), NR.data(), NL.size());
+    bool all_finite = true;
+    for (float v : NL) all_finite = all_finite && std::isfinite(v);
+    for (float v : NR) all_finite = all_finite && std::isfinite(v);
+    check(all_finite && n.bad_input_count() == 4,
+          "NaN/Inf sustituidos y contados (== 4)");
+    // mono
+    PlateReverbRef m;
+    m.set_params(p);
+    m.set_sample_rate(48000);
+    m.prepare();
+    std::vector<float> mono(4800);
+    for (size_t i = 0; i < mono.size(); ++i)
+        mono[i] = float(0.5 * std::sin(2.0 * 3.14159265358979323846 * 1000.0 *
+                                       double(i) / 48000.0));
+    m.process(mono.data(), nullptr, mono.size());
+    bool mfinite = true;
+    for (float v : mono) mfinite = mfinite && std::isfinite(v);
+    check(mfinite, "salida mono finita");
+}
+
+void test_engine_chain_plate() {
+    std::cout << "[test] engine cadena [eq, plate]: extremo a extremo finito\n";
+    WavData in = make_sine(48000, 48000, 0.5);
+    Engine engine(48000.0, 512);
+    PassiveEQRef::Params peq;
+    peq.freq_hz = 1000.0;
+    peq.boost_db = 6.0;
+    auto eq = std::make_unique<PassiveEQAdapter>(peq);
+    auto plate = std::make_unique<PlateAdapter>(PlateReverbRef::Params{});
+    engine.add_processor(std::move(eq));         // orden de inserción: eq -> plate
+    engine.add_processor(std::move(plate));
+    FileAudioSource src(in);
+    WavAudioSink sink(48000, 2);
+    RunReport rep;
+    std::string err;
+    check(engine.run(src, sink, rep, err), "corrida de la cadena completa");
+    check(rep.frames_rendered == 48000, "marcos preservados (48000)");
+    const std::string tmp = (std::filesystem::temp_directory_path() /
+                             "deluge_sim_test_chain_plate.wav").string();
+    check(sink.finalize(tmp, err), "sumidero escribe WAV");
+    WavData back;
+    check(read_wav(tmp, back, err) && back.frames() == 48000, "relectura OK");
+    bool finite = true;
+    for (float v : back.samples) finite = finite && std::isfinite(v);
+    check(finite, "salida de la cadena finita");
+}
+
 } // namespace
 
 int main() {
-    std::cout << "deluge-sim :: simtests v0.4\n";
+    std::cout << "deluge-sim :: simtests v0.5\n";
     test_wav_roundtrip();
     test_fet76_no_gr();
     test_fet76_gr_steady();
@@ -863,6 +1159,12 @@ int main() {
     test_eq_trick_curve();
     test_eq_nonfinite_mono();
     test_engine_chain_eq();
+    test_plate_rt60();
+    test_plate_damping_hf();
+    test_plate_dry_and_predelay();
+    test_plate_determinism_mod();
+    test_plate_stability_nonfinite_mono();
+    test_engine_chain_plate();
     if (g_failures == 0) {
         std::cout << "RESULTADO: TODO OK\n";
         return 0;

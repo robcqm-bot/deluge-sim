@@ -12,7 +12,8 @@
       dependent release) ✅ v0.3 (`OptoCompRef`)
 - [x] Passive-style program EQ (boost/cut trick) ✅ v0.4 (`PassiveEQRef`,
       recorte a 2.5×f0 y el truco verificado contra |H| analítica)
-- [ ] Plate-style FDN reverb (modulated)
+- [x] Plate-style FDN reverb (modulated) ✅ v0.5 (`PlateReverbRef`, FDN8
+      Hadamard + RT60 por línea + damping + LFOs; RT60 medido = objetivo)
 - [ ] Tape-style saturation (per-track insert)
 
 ## Infrastructure
