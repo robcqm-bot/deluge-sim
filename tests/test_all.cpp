@@ -4,11 +4,14 @@
 // =====================================================================
 #include "board_core.hpp"
 #include "deluge_sim/engine.hpp"
+#include "deluge_sim/preset.hpp"
+#include "deluge_sim/stream_source.hpp"
 #include "deluge_sim/wav_io.hpp"
 #include "suite_core/fet76_ref.hpp"
 #include "suite_core/opto_comp.hpp"
 #include "suite_core/passive_eq.hpp"
 #include "suite_core/plate_reverb.hpp"
+#include "suite_core/tape_sat.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -1130,10 +1133,17 @@ void test_engine_chain_plate() {
     check(finite, "salida de la cadena finita");
 }
 
+// ------------- módulos v0.6 (trabajo en paralelo, integrados) --------
+// Cada .inc se incluye verbatim DENTRO de este namespace anónimo: usa
+// check()/make_sine() de arriba y NO trae #include propios.
+#include "test_tape.inc"
+#include "test_stream.inc"
+#include "test_preset.inc"
+
 } // namespace
 
 int main() {
-    std::cout << "deluge-sim :: simtests v0.5\n";
+    std::cout << "deluge-sim :: simtests v0.6\n";
     test_wav_roundtrip();
     test_fet76_no_gr();
     test_fet76_gr_steady();
@@ -1165,6 +1175,24 @@ int main() {
     test_plate_determinism_mod();
     test_plate_stability_nonfinite_mono();
     test_engine_chain_plate();
+    test_tape_dc_zero();
+    test_tape_odd_symmetry();
+    test_tape_small_signal_gain();
+    test_tape_saturation_exact();
+    test_tape_bounded();
+    test_tape_nonfinite_mono();
+    test_stream_equals_ram();
+    test_stream_partial_tail();
+    test_stream_mono_fold();
+    test_stream_float32();
+    test_stream_truncated();
+    test_stream_engine_bitexact();
+    test_preset_roundtrip();
+    test_preset_malformed();
+    test_preset_unknown_fields();
+    test_preset_bad_types();
+    test_preset_empty();
+    test_preset_disk_errors();
     if (g_failures == 0) {
         std::cout << "RESULTADO: TODO OK\n";
         return 0;

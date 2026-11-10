@@ -1,6 +1,8 @@
 // =====================================================================
 // deluge-sim / engine.hpp — Pipeline de render y fuentes/sumideros
-// Data flow: FileAudioSource -> [IProcessor x N] -> WavAudioSink
+// Data flow: IAudioSource -> [IProcessor x N] -> WavAudioSink
+// Engine acepta CUALQUIER IAudioSource: en RAM (FileAudioSource) o en
+// streaming desde disco (StreamWavSource, ver deluge_sim/stream_source.hpp).
 // =====================================================================
 #pragma once
 #include "deluge_sim/core.hpp"
@@ -10,16 +12,29 @@
 
 namespace deluge_sim {
 
-// --- Source: serves blocks from an in-memory WavData ---
-// v0.1: whole file in RAM (test renders are small). Streaming from disk
-// for large files is on the roadmap (see TODO.md).
-class FileAudioSource {
+// --- Interfaz de fuente de audio (Strategy) ---
+// Contrato: read() llena 'b' (planar L/R, mono se pliega a estéreo) con
+// hasta max_frames marcos y devuelve false al agotar el stream. Cualquier
+// implementación sirve para Engine::run: en RAM (FileAudioSource) o en
+// streaming desde disco (StreamWavSource, para renders de horas sin
+// cargar el archivo completo a memoria).
+class IAudioSource {
+public:
+    virtual ~IAudioSource() = default;
+    virtual bool read(Block& b, size_t max_frames) = 0;   // false = fin
+};
+
+// --- Source: sirve bloques desde un WavData ya cargado en RAM ---
+// v0.1: fichero completo en RAM (renders de prueba pequeños). Para
+// ficheros grandes usa StreamWavSource (stream_source.hpp), que lee por
+// bloques desde disco; ambas implementan IAudioSource.
+class FileAudioSource : public IAudioSource {
 public:
     explicit FileAudioSource(const WavData& data);
 
     // Aceptado en carga: 1 canal (se pliega a estéreo) o 2 canales.
     // Otros recuentos deben rechazarse ANTES de construir (ver WavData).
-    bool read(Block& b, size_t max_frames);   // false = fin de stream
+    bool read(Block& b, size_t max_frames) override;   // false = fin de stream
 
 private:
     const WavData& data_;
@@ -51,8 +66,9 @@ public:
     size_t processor_count() const { return chain_.size(); }
 
     // Prepara todos los procesadores y ejecuta source -> chain -> sink.
+    // Acepta cualquier IAudioSource (RAM o streaming desde disco).
     // No lanza: los fallos vuelven en 'err' (y RunReport queda parcial).
-    bool run(FileAudioSource& src, WavAudioSink& sink,
+    bool run(IAudioSource& src, WavAudioSink& sink,
              RunReport& report, std::string& err);
 
 private:

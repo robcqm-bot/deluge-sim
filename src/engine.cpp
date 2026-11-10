@@ -62,7 +62,7 @@ void Engine::add_processor(ProcessorPtr p) {
     if (p) chain_.push_back(std::move(p));
 }
 
-bool Engine::run(FileAudioSource& src, WavAudioSink& sink,
+bool Engine::run(IAudioSource& src, WavAudioSink& sink,
                  RunReport& report, std::string& err) {
     ProcessContext ctx{sample_rate_, max_block_, kMaxChannels};
     for (auto& p : chain_) {

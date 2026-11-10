@@ -30,15 +30,26 @@ modulated 8-line FDN with Hadamard feedback matrix, per-line RT60 gains
 (every line decays at exactly `decay_s`), loop damping, predelay, input
 diffusion and stereo-decorrelated tap groups.
 
+**v0.6 — tape, streaming, presets**: fifth reference processor `TapeSatRef`
+(asymmetric-bias tape saturation, odd-symmetric and DC-free by design);
+`StreamWavSource` reads WAVs from disk in blocks behind the new
+`IAudioSource` interface (hour-long renders without loading the file to
+RAM); chain presets import/export as JSON with a dependency-free mini
+parser; CI gains a Windows MinGW (MSYS2 UCRT64) job.
+
 - ✅ Working reference processors: `Fet76Ref` (textbook FET-style feedback
   compressor, stereo-linked, one-pole ballistics), `OptoCompRef`
   (opto-cell compressor with soft-knee gain law, slow photoresistor
   attack and program-dependent release), `PassiveEQRef` (passive-style
-  program EQ with the boost/cut trick) and `PlateReverbRef` (modulated
-  FDN plate reverb)
-- ✅ Dependency-free RIFF/WAV reader & writer (PCM16/24/32, float32,
-  WAVE_FORMAT_EXTENSIBLE)
-- ✅ Test suite with mathematically documented expectations (31 cases)
+  program EQ with the boost/cut trick), `PlateReverbRef` (modulated FDN
+  plate reverb) and `TapeSatRef` (tape-style saturation with asymmetric
+  bias, odd-symmetric: y(0)=0 and y(−x)=−y(x) exact)
+- ✅ Streaming WAV source (blocks from disk) behind `IAudioSource` —
+  `Engine::run` accepts RAM or streaming sources interchangeably
+  (bit-identical output, verified by tests)
+- ✅ Chain presets (JSON, dependency-free mini parser, roundtrip
+  bit-exact) + CI matrix: Windows MSVC, Ubuntu gcc, Windows MinGW
+- ✅ Test suite with mathematically documented expectations (49 cases)
 - ✅ Clean module boundary ("firewall") between the host framework and
   your DSP code — see below
 
@@ -101,12 +112,19 @@ cmake --build build --config Release   # SDL2.dll is copied next to the exe
 ## Usage
 
 ```bash
-# run the acceptance tests (31 cases, mathematically documented)
+# run the acceptance tests (49 cases, mathematically documented)
 build/simtests.exe
 
 # render a file through a chain of reference processors
 build/simcli.exe render --in input.wav --out output.wav \
-    --chain eq,plate freq_hz=150 boost_db=3 decay_s=3.2 damp_pct=45
+    --chain eq,plate,tape freq_hz=150 boost_db=3 decay_s=3.2 drive_db=9
+
+# chain presets: save, inspect, render with overrides
+build/simcli.exe preset --save my_chain.json --chain eq,plate,tape \
+    freq_hz=120 boost_db=4 decay_s=3.5 drive_db=9 bias_pct=25
+build/simcli.exe preset --load my_chain.json
+build/simcli.exe render --in in.wav --out out.wav --preset my_chain.json \
+    boost_db=5 drive_db=12      # CLI k=v override the preset
 
 # per-fx parameters (unprefixed keys apply to every fx that has them)
 build/simcli.exe render --in in.wav --out out.wav --chain fet76,opto \
@@ -118,6 +136,7 @@ build/simcli.exe render --in in.wav --out out.wav --chain fet76,opto \
 # eq keys:    freq_hz boost_db cut_db q_boost q_cut trim_db
 # plate keys: decay_s damp_pct predelay_ms mod_rate_hz mod_depth_ms
 #             mix_pct out_gain_db
+# tape keys:  drive_db bias_pct trim_db
 # --block N   (frames per render block, 8..65536)
 ```
 
@@ -162,12 +181,11 @@ See [TODO.md](TODO.md). Highlights:
 1. ~~**Phase 2 — board simulator**~~ ✅ delivered in v0.2 (`board_sim`,
    SDL2). Next steps for it: preset/clip persistence on the "SD card" and
    a song-browsing UI.
-2. ~~More reference processors (opto-style...)~~ **opto shipped in v0.3**,
-   **passive EQ with boost/cut trick shipped in v0.4**, **plate FDN reverb
-   shipped in v0.5**. Next: tape-style saturation — same `IProcessor`
-   contract.
-3. Streaming file source for very long renders.
-4. Preset import/export.
+2. ~~More reference processors~~ **all shipped**: opto (v0.3), passive EQ
+   with boost/cut trick (v0.4), plate FDN reverb (v0.5), tape saturation
+   (v0.6) — all behind the same `IProcessor` contract.
+3. ~~Streaming file source~~ ✅ v0.6 (`StreamWavSource` + `IAudioSource`).
+4. ~~Preset import/export~~ ✅ v0.6 (JSON, dependency-free).
 
 ## Contributing
 

@@ -1,4 +1,4 @@
-# ARCHITECTURE.md — deluge-sim v0.5
+# ARCHITECTURE.md — deluge-sim v0.6
 
 > (Documento de arquitectura en español — traducciones al inglés bienvenidas.)
 
@@ -14,6 +14,7 @@
 | **Adapter** | `AdapterFet76`, `AdapterOpto`, `AdapterPassiveEQ`, `AdapterPlateReverb` | Traduce `deluge_sim::Block` (tipo del sim) → punteros crudos `float*` (tipo de suite-core). En la integración real al firmware estos archivos viven en `src/deluge/dsp/suite/`. Compartidos por simcli y boardsim (headers `app/adapter_*.hpp`) |
 | **DTO + Report** | `RunReport` | Telemetría explícita en vez de prints dispersos |
 | **Facade + composición** | `BoardPump` (v0.2) | El lazo interactivo del board REUSA `FileAudioSource`, `IProcessor` y la guardia del engine en vez de duplicar el pipeline: solo cambia el modo de conducción (cadencia fija a demanda vs batch completo) |
+| **Interface (polimorfismo de fuente)** | `IAudioSource` (v0.6) | `Engine::run` acepta CUALQUIER fuente (`FileAudioSource` en RAM o `StreamWavSource` por bloques desde disco) — salida bit-idéntica verificada por tests |
 
 **Decisiones clave:**
 1. **Planar stereo** (`L[]`/`R[]` separados) y no intercalado: el DSP del M7 del Deluge trabaja por canal; evita mezclas de strides en suite-core.
@@ -33,31 +34,41 @@ deluge-sim\
 ├── include\deluge_sim\
 │   ├── core.hpp                          # Block, ProcessContext, IProcessor, RunReport
 │   ├── wav_io.hpp                        # WavData, read_wav, write_wav16
-│   └── engine.hpp                        # FileAudioSource, WavAudioSink, Engine
+│   ├── engine.hpp                        # IAudioSource, FileAudioSource, WavAudioSink, Engine
+│   ├── stream_source.hpp                 # StreamWavSource (bloques desde disco, v0.6)
+│   └── preset.hpp                        # ChainPreset + JSON mini sin dependencias (v0.6)
 ├── src\
 │   ├── wav_io.cpp
-│   └── engine.cpp
+│   ├── engine.cpp
+│   ├── stream_source.cpp
+│   └── preset.cpp
 ├── suite_core\                           # <<< ZONA PROPIA (cortafuegos)
 │   ├── include\suite_core\fet76_ref.hpp  # compresor FET feedback
 │   ├── include\suite_core\opto_comp.hpp  # compresor óptico (v0.3)
 │   ├── include\suite_core\passive_eq.hpp # EQ pasivo de programa (v0.4)
 │   ├── include\suite_core\plate_reverb.hpp # reverb placa FDN (v0.5)
+│   ├── include\suite_core\tape_sat.hpp   # saturación de cinta (v0.6)
 │   └── src\fet76_ref.cpp
 │   └── src\opto_comp.cpp
 │   └── src\passive_eq.cpp
 │   └── src\plate_reverb.cpp
+│   └── src\tape_sat.cpp
 ├── app\
 │   ├── adapter_fet76.hpp                 # adaptador fet76 (el puente)
 │   ├── adapter_opto.hpp                  # adaptador opto (v0.3)
 │   ├── adapter_eq.hpp                    # adaptador EQ pasivo (v0.4)
 │   ├── adapter_plate.hpp                 # adaptador reverb (v0.5)
-│   ├── main.cpp                          # simcli (--chain desde v0.3)
+│   ├── adapter_tape.hpp                  # adaptador cinta (v0.6)
+│   ├── main.cpp                          # simcli (--chain, --preset, preset)
 │   └── board_sim\                        # <<< fase 2 (v0.2)
 │       ├── board_clock.hpp               # stubs de reloj (48 kHz, bloque 128)
 │       ├── board_core.hpp/.cpp           # SdCard + PadGrid + BoardPump (SDL-free)
 │       └── board_main.cpp                # boardsim: ÚNICO archivo que enlaza SDL2
 └── tests\
-    └── test_all.cpp                      # simtests (exit 0 = aceptación, 31 pruebas)
+    ├── test_all.cpp                      # simtests: main + helpers + pruebas propias
+    └── test_{tape,stream,preset}.inc     # módulos incluidos dentro del namespace
+                                           # (contrato: sin #include/main, usan check())
+                                           # — 49 casos de aceptación en total
 ```
 
 ## 3. Data Flow
@@ -136,7 +147,7 @@ en cada corrida — es el indicador de regresión de rendimiento del proyecto.
 - Preferido: `cmake -B build -A x64 && cmake --build build --config Release`
   → `build\Release\simtests.exe` + `simcli.exe`
 - Alternativa (MinGW/g++): `./build.sh run`
-- Puerta de aceptación: `simtests` exit 0 (31 pruebas con expectativa matemática)
+- Puerta de aceptación: `simtests` exit 0 (49 casos con expectativa matemática)
 - **board_sim (opcional)**: pasa `-DSDL2_SDK_DIR=<SDK>/x86_64-w64-mingw32`
   (SDK oficial MinGW de libsdl-org; la DLL se copia junto al exe) o instala
   `libsdl2-dev` (Linux, find_package). Sin SDL2 el target se omite con un
@@ -201,6 +212,7 @@ matemática que `simtests` verifica.
 | `OptoCompRef` | fotocélula: detector = envolvente one-pole ASIMÉTRICA de max(\|L\|,\|R\|) | rodilla suave C1 sobre el exceso e: `e≤0: 0 · 0<e≤w: s·e²/(2w) · e>w: s·(e−w/2)`, s = 1−1/R, w = knee_db |
 | `PassiveEQRef` | EQ pasivo de programa: dos biquad RBJ peaking en cascada | refuerzo exacto +boost_db en f0; recorte −cut_db en 2.5·f0 (kCutFreqRatio); el TRUCO (boost+cut a la misma frecuencia) emerge del producto: pico en f0 con dip encima. `magnitude_db()` expone \|H(e^jw)\| EXACTA de la cascada |
 | `PlateReverbRef` | placa: FDN de 8 líneas, damping one-pole por línea, matriz de Hadamard normalizada (ortogonal), predelay, difusor de entrada (3 allpass), LFOs por línea | g_i = 10^(−3·t_i/RT60) ⇒ CADA línea decae 10^(−3t/RT60) por unidad de tiempo ⇒ RT60 de la cola == decay_s exacto en graves; damping recorta HF una vez por vuelta (fc log-escala 20 kHz→800 Hz) |
+| `TapeSatRef` | cinta: waveshaper estático tanh con bias por signo (rodillas asimétricas arriba/abajo) | y(0)=0 exacto; IMPAR: y(−x)==−y(x) bit-exacto ⇒ sin DC ni armónicos pares; ganancia small-signal == 10^(drive_db/20); pico de salida == (tanh(g·A+b)−tanh(b))/(1−tanh²(b)) para A>0 — todo verificado exactamente por tests |
 
 **OptoCompRef, decisiones documentadas:**
 

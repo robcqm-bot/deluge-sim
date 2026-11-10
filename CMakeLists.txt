@@ -20,6 +20,8 @@ endif()
 add_library(deluge_sim_lib STATIC
     src/wav_io.cpp
     src/engine.cpp
+    src/stream_source.cpp
+    src/preset.cpp
 )
 target_include_directories(deluge_sim_lib PUBLIC include)
 
@@ -29,6 +31,7 @@ add_library(suite_core STATIC
     suite_core/src/opto_comp.cpp
     suite_core/src/passive_eq.cpp
     suite_core/src/plate_reverb.cpp
+    suite_core/src/tape_sat.cpp
 )
 target_include_directories(suite_core PUBLIC suite_core/include)
 # NOTA DE ARQUITECTURA: suite_core NO enlaza contra deluge_sim_lib.
