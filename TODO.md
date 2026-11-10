@@ -10,7 +10,8 @@
 ## More reference processors (each with tests + documented expectations)
 - [x] Opto-style compressor (slow photoresistor ballistics + program-
       dependent release) ✅ v0.3 (`OptoCompRef`)
-- [ ] Passive-style program EQ (boost/cut trick)
+- [x] Passive-style program EQ (boost/cut trick) ✅ v0.4 (`PassiveEQRef`,
+      recorte a 2.5×f0 y el truco verificado contra |H| analítica)
 - [ ] Plate-style FDN reverb (modulated)
 - [ ] Tape-style saturation (per-track insert)
 

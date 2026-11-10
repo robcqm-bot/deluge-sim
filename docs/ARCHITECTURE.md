@@ -1,4 +1,4 @@
-# ARCHITECTURE.md — deluge-sim v0.3
+# ARCHITECTURE.md — deluge-sim v0.4
 
 > (Documento de arquitectura en español — traducciones al inglés bienvenidas.)
 
@@ -11,7 +11,7 @@
 | **Strategy** | `IProcessor` | Cada FX (Fet76Ref hoy, PLATE-140 mañana) es intercambiable sin tocar el motor |
 | **Pipeline** | `Engine::run` / `BoardPump::pump` | Render por bloques: fuente → cadena ordenada → sumidero; espejo del flujo real del firmware Deluge (blocks → FX → master) |
 | **Firewall (module boundary)** | `suite_core/` vs `include/deluge_sim/` | Dos bibliotecas estáticas INDEPENDIENTES; la dependencia va en una sola dirección (`app → ambas`). Ningún header cruza la frontera. El único puente es un adaptador de ~30 líneas (`AdapterFet76` en `app/adapter_fet76.hpp`) |
-| **Adapter** | `AdapterFet76`, `AdapterOpto` | Traduce `deluge_sim::Block` (tipo del sim) → punteros crudos `float*` (tipo de suite-core). En la integración real al firmware estos archivos viven en `src/deluge/dsp/suite/`. Compartidos por simcli y boardsim (headers `app/adapter_*.hpp`) |
+| **Adapter** | `AdapterFet76`, `AdapterOpto`, `AdapterPassiveEQ` | Traduce `deluge_sim::Block` (tipo del sim) → punteros crudos `float*` (tipo de suite-core). En la integración real al firmware estos archivos viven en `src/deluge/dsp/suite/`. Compartidos por simcli y boardsim (headers `app/adapter_*.hpp`) |
 | **DTO + Report** | `RunReport` | Telemetría explícita en vez de prints dispersos |
 | **Facade + composición** | `BoardPump` (v0.2) | El lazo interactivo del board REUSA `FileAudioSource`, `IProcessor` y la guardia del engine en vez de duplicar el pipeline: solo cambia el modo de conducción (cadencia fija a demanda vs batch completo) |
 
@@ -40,18 +40,21 @@ deluge-sim\
 ├── suite_core\                           # <<< ZONA PROPIA (cortafuegos)
 │   ├── include\suite_core\fet76_ref.hpp  # compresor FET feedback
 │   ├── include\suite_core\opto_comp.hpp  # compresor óptico (v0.3)
+│   ├── include\suite_core\passive_eq.hpp # EQ pasivo de programa (v0.4)
 │   └── src\fet76_ref.cpp
 │   └── src\opto_comp.cpp
+│   └── src\passive_eq.cpp
 ├── app\
 │   ├── adapter_fet76.hpp                 # adaptador fet76 (el puente)
 │   ├── adapter_opto.hpp                  # adaptador opto (v0.3)
+│   ├── adapter_eq.hpp                    # adaptador EQ pasivo (v0.4)
 │   ├── main.cpp                          # simcli (--chain desde v0.3)
 │   └── board_sim\                        # <<< fase 2 (v0.2)
 │       ├── board_clock.hpp               # stubs de reloj (48 kHz, bloque 128)
 │       ├── board_core.hpp/.cpp           # SdCard + PadGrid + BoardPump (SDL-free)
 │       └── board_main.cpp                # boardsim: ÚNICO archivo que enlaza SDL2
 └── tests\
-    └── test_all.cpp                      # simtests (exit 0 = aceptación, 19 pruebas)
+    └── test_all.cpp                      # simtests (exit 0 = aceptación, 25 pruebas)
 ```
 
 ## 3. Data Flow
@@ -130,7 +133,7 @@ en cada corrida — es el indicador de regresión de rendimiento del proyecto.
 - Preferido: `cmake -B build -A x64 && cmake --build build --config Release`
   → `build\Release\simtests.exe` + `simcli.exe`
 - Alternativa (MinGW/g++): `./build.sh run`
-- Puerta de aceptación: `simtests` exit 0 (19 pruebas con expectativa matemática)
+- Puerta de aceptación: `simtests` exit 0 (25 pruebas con expectativa matemática)
 - **board_sim (opcional)**: pasa `-DSDL2_SDK_DIR=<SDK>/x86_64-w64-mingw32`
   (SDK oficial MinGW de libsdl-org; la DLL se copia junto al exe) o instala
   `libsdl2-dev` (Linux, find_package). Sin SDL2 el target se omite con un
@@ -193,6 +196,7 @@ matemática que `simtests` verifica.
 |---|---|---|
 | `Fet76Ref` | FET de realimentación (detector = salida de la celda, muestra previa) | curva feedback: out_peak = (in_peak + k·thresh)/(1+k), k = 1−1/R |
 | `OptoCompRef` | fotocélula: detector = envolvente one-pole ASIMÉTRICA de max(\|L\|,\|R\|) | rodilla suave C1 sobre el exceso e: `e≤0: 0 · 0<e≤w: s·e²/(2w) · e>w: s·(e−w/2)`, s = 1−1/R, w = knee_db |
+| `PassiveEQRef` | EQ pasivo de programa: dos biquad RBJ peaking en cascada | refuerzo exacto +boost_db en f0; recorte −cut_db en 2.5·f0 (kCutFreqRatio); el TRUCO (boost+cut a la misma frecuencia) emerge del producto: pico en f0 con dip encima. `magnitude_db()` expone \|H(e^jw)\| EXACTA de la cascada |
 
 **OptoCompRef, decisiones documentadas:**
 
@@ -209,3 +213,19 @@ matemática que `simtests` verifica.
    tests la comprueban a 1e-3 dB en tres puntos (rodilla, juntura, lineal).
 4. **Costo por muestra**: 1 `log`/muestra del detector + 1 `exp` (ganancia) +
    aritmética escalar — mismo orden que Fet76Ref.
+
+**PassiveEQRef, decisiones documentadas:**
+
+1. **Ambas etapas peaking RBJ** (cookbook, exactas): |H(DC)| = |H(Nyquist)| = 1
+   garantizados — el test lo verifica bit a bit con DC.
+2. **kCutFreqRatio = 2.5 es constante del diseño genérico**: en el clásico,
+   la banda de atenuación del programa cae por ENCIMA del refuerzo; de esa
+   separación nace el truco. El selector marca la frecuencia del REFUERZO.
+3. **El truco se verifica como curva**: boost 8 + cut 8 a la misma frecuencia
+   → pico neto +4.9 dB en f0, dip −6.1 dB en 2.5·f0, ~0 dB arriba — y los tres
+   puntos comparados contra `magnitude_db()` (evaluación compleja exacta).
+4. **Guardia denormal en los estados** del biquad (silencio largo) y estados
+   por canal (LTI: sin enlace estéreo necesario).
+5. **Costo por muestra**: 2 biquads TDF2 por canal — aritmética escalar pura,
+   sin funciones trascendentes en el lazo de render (todo queda en los
+   coeficientes).

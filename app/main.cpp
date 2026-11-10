@@ -13,6 +13,7 @@
 // deluge_sim y suite_core; las clases están en adapter_*.hpp). En la
 // integración real al firmware se trasladan a src/deluge/dsp/suite/.
 // =====================================================================
+#include "adapter_eq.hpp"
 #include "adapter_fet76.hpp"
 #include "adapter_opto.hpp"
 #include "deluge_sim/engine.hpp"
@@ -39,20 +40,23 @@ const std::map<std::string, std::vector<const char*>>& fx_keys() {
         {"opto",  {"thresh_db", "ratio", "knee_db", "attack_s",
                    "release_fast_s", "release_slow_s", "gr_span_db",
                    "out_gain_db"}},
+        {"eq",    {"freq_hz", "boost_db", "cut_db", "q_boost", "q_cut",
+                   "trim_db"}},
     };
     return m;
 }
 
 void print_usage() {
     std::cout <<
-        "deluge-sim v0.3 (offline DSP harness + board simulator)\n"
+        "deluge-sim v0.4 (offline DSP harness + board simulator)\n"
         "Uso:\n"
-        "  simcli render --in ENTRADA.wav --out SALIDA.wav [--chain fet76,opto]"
+        "  simcli render --in ENTRADA.wav --out SALIDA.wav [--chain fet76,opto,eq]"
         " [k=v ...] [--block N]\n"
         "    --chain: fx en orden de inserción (default fet76)\n"
         "    k fet76: in_gain_db thresh_db ratio attack_s release_s out_gain_db\n"
         "    k opto:  thresh_db ratio knee_db attack_s release_fast_s"
         " release_slow_s gr_span_db out_gain_db\n"
+        "    k eq:    freq_hz boost_db cut_db q_boost q_cut trim_db\n"
         "    prefijo por fx: fet76.ratio=8 opto.knee_db=3\n"
         "  simcli help\n";
 }
@@ -126,7 +130,7 @@ int cmd_render(int argc, char** argv) {
                 item = item.substr(b, e - b + 1);
                 if (fx_keys().count(item) == 0) {
                     std::cerr << "ERROR: fx desconocido en --chain: '" << item
-                              << "' (válidos: fet76 opto)\n";
+                              << "' (válidos: fet76 opto eq)\n";
                     return 2;
                 }
                 chain.push_back(item);
@@ -202,10 +206,19 @@ int cmd_render(int argc, char** argv) {
     pop.gr_span_db     = kv_val(kv, "opto", "gr_span_db",     pop.gr_span_db);
     pop.out_gain_db    = kv_val(kv, "opto", "out_gain_db",    pop.out_gain_db);
 
+    suite_core::PassiveEQRef::Params peq;
+    peq.freq_hz  = kv_val(kv, "eq", "freq_hz",  peq.freq_hz);
+    peq.boost_db = kv_val(kv, "eq", "boost_db", peq.boost_db);
+    peq.cut_db   = kv_val(kv, "eq", "cut_db",   peq.cut_db);
+    peq.q_boost  = kv_val(kv, "eq", "q_boost",  peq.q_boost);
+    peq.q_cut    = kv_val(kv, "eq", "q_cut",    peq.q_cut);
+    peq.trim_db  = kv_val(kv, "eq", "trim_db",  peq.trim_db);
+
     Engine engine(double(wav.sample_rate), size_t(block));
     for (const std::string& fx : chain) {
         if (fx == "fet76")      engine.add_processor(std::make_unique<AdapterFet76>(p76));
         else if (fx == "opto")  engine.add_processor(std::make_unique<AdapterOpto>(pop));
+        else if (fx == "eq")    engine.add_processor(std::make_unique<AdapterPassiveEQ>(peq));
     }
 
     FileAudioSource src(wav);

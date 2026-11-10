@@ -27,6 +27,7 @@ target_include_directories(deluge_sim_lib PUBLIC include)
 add_library(suite_core STATIC
     suite_core/src/fet76_ref.cpp
     suite_core/src/opto_comp.cpp
+    suite_core/src/passive_eq.cpp
 )
 target_include_directories(suite_core PUBLIC suite_core/include)
 # NOTA DE ARQUITECTURA: suite_core NO enlaza contra deluge_sim_lib.

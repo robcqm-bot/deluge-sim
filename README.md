@@ -20,13 +20,19 @@ or per-fx `fx.k=v` prefixes), and a second reference processor ships:
 `OptoCompRef`, an opto-cell compressor with asymmetric (slow) ballistics
 and program-dependent release.
 
+**v0.4 — passive program EQ**: third reference processor `PassiveEQRef`
+(resonant low boost + program cut band above it) reproducing the classic
+passive-EQ boost/cut trick; its full magnitude response is exposed as an
+exact analytic `magnitude_db()`.
+
 - ✅ Working reference processors: `Fet76Ref` (textbook FET-style feedback
-  compressor, stereo-linked, one-pole ballistics) and `OptoCompRef`
+  compressor, stereo-linked, one-pole ballistics), `OptoCompRef`
   (opto-cell compressor with soft-knee gain law, slow photoresistor
-  attack and program-dependent release)
+  attack and program-dependent release) and `PassiveEQRef` (passive-style
+  program EQ with the boost/cut trick)
 - ✅ Dependency-free RIFF/WAV reader & writer (PCM16/24/32, float32,
   WAVE_FORMAT_EXTENSIBLE)
-- ✅ Test suite with mathematically documented expectations (19 cases)
+- ✅ Test suite with mathematically documented expectations (25 cases)
 - ✅ Clean module boundary ("firewall") between the host framework and
   your DSP code — see below
 
@@ -89,12 +95,12 @@ cmake --build build --config Release   # SDL2.dll is copied next to the exe
 ## Usage
 
 ```bash
-# run the acceptance tests (19 cases, mathematically documented)
+# run the acceptance tests (25 cases, mathematically documented)
 build/simtests.exe
 
 # render a file through a chain of reference processors
 build/simcli.exe render --in input.wav --out output.wav \
-    --chain fet76,opto thresh_db=-18 ratio=8 attack_s=0.0008 release_s=0.25
+    --chain eq,fet76,opto freq_hz=120 boost_db=6 cut_db=4 ratio=8
 
 # per-fx parameters (unprefixed keys apply to every fx that has them)
 build/simcli.exe render --in in.wav --out out.wav --chain fet76,opto \
@@ -103,6 +109,7 @@ build/simcli.exe render --in in.wav --out out.wav --chain fet76,opto \
 # fet76 keys: in_gain_db thresh_db ratio attack_s release_s out_gain_db
 # opto keys:  thresh_db ratio knee_db attack_s release_fast_s
 #             release_slow_s gr_span_db out_gain_db
+# eq keys:    freq_hz boost_db cut_db q_boost q_cut trim_db
 # --block N   (frames per render block, 8..65536)
 ```
 
@@ -147,9 +154,10 @@ See [TODO.md](TODO.md). Highlights:
 1. ~~**Phase 2 — board simulator**~~ ✅ delivered in v0.2 (`board_sim`,
    SDL2). Next steps for it: preset/clip persistence on the "SD card" and
    a song-browsing UI.
-2. ~~More reference processors (opto-style...)~~ **opto shipped in v0.3**.
-   Next: passive-EQ-style, plate-style FDN reverb, tape-style saturation —
-   all behind the same `IProcessor` contract.
+2. ~~More reference processors (opto-style...)~~ **opto shipped in v0.3**,
+   **passive EQ with boost/cut trick shipped in v0.4**. Next: plate-style
+   FDN reverb, tape-style saturation — all behind the same `IProcessor`
+   contract.
 3. Streaming file source for very long renders.
 4. Preset import/export.
 

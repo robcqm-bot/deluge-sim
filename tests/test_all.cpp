@@ -7,6 +7,7 @@
 #include "deluge_sim/wav_io.hpp"
 #include "suite_core/fet76_ref.hpp"
 #include "suite_core/opto_comp.hpp"
+#include "suite_core/passive_eq.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -23,6 +24,7 @@ namespace {
 using namespace deluge_sim;
 using suite_core::Fet76Ref;
 using suite_core::OptoCompRef;
+using suite_core::PassiveEQRef;
 
 int g_failures = 0;
 
@@ -67,6 +69,25 @@ public:
 
 private:
     OptoCompRef o_;
+};
+
+// Adaptador blanco del EQ pasivo (mismo patrón).
+class PassiveEQAdapter : public IProcessor {
+public:
+    explicit PassiveEQAdapter(const PassiveEQRef::Params& p) { e_.set_params(p); }
+    const char* name() const override { return "passive_eq"; }
+    void prepare(const ProcessContext& ctx) override {
+        e_.set_sample_rate(ctx.sample_rate);
+        e_.prepare();
+    }
+    void process(Block& b) override {
+        e_.process(b.L, b.channels == 1 ? nullptr : b.R, b.frames);
+    }
+    void reset() override { e_.reset(); }
+    PassiveEQRef& ref() { return e_; }
+
+private:
+    PassiveEQRef e_;
 };
 
 // Genera un seno estéreo intercalado con pico dado (frecuencia fija 1 kHz).
@@ -634,10 +655,189 @@ void test_engine_chain_fet_opto() {
           "sumidero escribe WAV de la cadena");
 }
 
+// ---------------- pruebas passive_eq (referencia, v0.4) --------------
+
+// Ganancia estacionaria (dB) a 'freq': senoidal de pico 0.5, 24 ciclos,
+// se mide el pico del último 25% (transitorio ya extinguido).
+double eq_steady_gain_db(const PassiveEQRef::Params& p, double freq) {
+    PassiveEQRef e;
+    e.set_params(p);
+    e.set_sample_rate(48000);
+    e.prepare();
+    const uint32_t sr = 48000;
+    const size_t n = size_t(double(sr) / freq) * 24;
+    std::vector<float> L(n), R(n);
+    for (size_t i = 0; i < n; ++i) {
+        float v = float(0.5 * std::sin(2.0 * 3.14159265358979323846 * freq *
+                                       double(i) / double(sr)));
+        L[i] = v;
+        R[i] = v;
+    }
+    e.process(L.data(), R.data(), n);
+    const size_t start = n - n / 4;
+    double peak = 0.0;
+    for (size_t i = start; i < n; ++i)
+        peak = std::max(peak, double(std::fabs(L[i])));
+    return 20.0 * std::log10(peak / 0.5);
+}
+
+void test_eq_dc_unity() {
+    std::cout << "[test] eq: unidad exacta en DC (ambas etapas peaking)\n";
+    PassiveEQRef::Params p;
+    p.boost_db = 8.0;
+    p.cut_db = 8.0;
+    PassiveEQRef e;
+    e.set_params(p);
+    e.set_sample_rate(48000);
+    e.prepare();
+    std::vector<float> L(9600, 0.4f), R(9600, 0.4f);
+    e.process(L.data(), R.data(), L.size());
+    check(std::fabs(L.back() - 0.4) < 1e-4 && std::fabs(R.back() - 0.4) < 1e-4,
+          "DC: salida == entrada (|H(1)| = 1 exacto)");
+    check(std::fabs(e.magnitude_db(0.0)) < 1e-9,
+          "magnitude_db(DC) == 0 dB exacto");
+}
+
+void test_eq_boost_response_exact() {
+    std::cout << "[test] eq: refuerzo exacto en f0 (RBJ, +6 dB) y recovery\n";
+    PassiveEQRef::Params p;
+    p.boost_db = 6.0;                       // freq 60, q_boost 0.9
+    const double g0 = eq_steady_gain_db(p, 60.0);
+    check(std::fabs(g0 - 6.0) < 0.05,
+          "en f0 la ganancia es EXACTAMENTE boost_db (medida " +
+          std::to_string(g0) + " dB)");
+    PassiveEQRef e;
+    e.set_params(p);
+    check(std::fabs(g0 - e.magnitude_db(60.0)) < 0.05,
+          "medido == |H| analitico en f0");
+    const double g10 = eq_steady_gain_db(p, 600.0);
+    check(std::fabs(g10) < 0.5 &&
+              std::fabs(g10 - e.magnitude_db(600.0)) < 0.05,
+          "recovery a 10x f0 ~ 0 dB y coherente con |H| (medida " +
+          std::to_string(g10) + " dB)");
+}
+
+void test_eq_cut_response_exact() {
+    std::cout << "[test] eq: recorte exacto en 2.5 f0 y mordida en f0\n";
+    PassiveEQRef::Params p;
+    p.cut_db = 9.0;                         // dip en 2.5*60 = 150 Hz
+    const double gdip = eq_steady_gain_db(p, 150.0);
+    check(std::fabs(gdip + 9.0) < 0.05,
+          "en 2.5*f0 el recorte es EXACTAMENTE -cut_db (medido " +
+          std::to_string(gdip) + " dB)");
+    PassiveEQRef e;
+    e.set_params(p);
+    check(std::fabs(gdip - e.magnitude_db(150.0)) < 0.05,
+          "medido == |H| analitico en el dip");
+    const double gf0 = eq_steady_gain_db(p, 60.0);
+    check(gf0 < -0.05 && gf0 > gdip,
+          "en f0 el dip muerde poco y menos que en su centro (medido " +
+          std::to_string(gf0) + " dB)");
+    check(std::fabs(gf0 - e.magnitude_db(60.0)) < 0.05,
+          "medido == |H| analitico en f0");
+}
+
+void test_eq_trick_curve() {
+    std::cout << "[test] eq: EL TRUCO — boost+cut a la misma frecuencia => "
+                 "pico con dip encima\n";
+    PassiveEQRef::Params p;
+    p.boost_db = 8.0;
+    p.cut_db = 8.0;
+    PassiveEQRef::Params pboost_only;
+    pboost_only.boost_db = 8.0;
+
+    const double g_f0 = eq_steady_gain_db(p, 60.0);       // pico neto
+    const double g_dip = eq_steady_gain_db(p, 150.0);     // dip sobre el pico
+    const double g_hi = eq_steady_gain_db(p, 750.0);      // 12.5x f0
+    const double g_boost_only = eq_steady_gain_db(pboost_only, 60.0);
+
+    check(g_f0 > 0.5 && g_f0 < g_boost_only,
+          "truco: pico neto en f0 (>0) pero recortado por el dip (medido " +
+          std::to_string(g_f0) + " vs boost solo " +
+          std::to_string(g_boost_only) + ")");
+    check(g_dip < -3.0,
+          "truco: dip claro por encima del pico (< -3 dB, medido " +
+          std::to_string(g_dip) + ")");
+    check(std::fabs(g_hi) < 1.0,
+          "recupera ~0 dB por encima de ambas bandas (medido " +
+          std::to_string(g_hi) + ")");
+    PassiveEQRef e;
+    e.set_params(p);
+    bool consistent = std::fabs(g_f0 - e.magnitude_db(60.0)) < 0.05 &&
+                      std::fabs(g_dip - e.magnitude_db(150.0)) < 0.05 &&
+                      std::fabs(g_hi - e.magnitude_db(750.0)) < 0.05;
+    check(consistent, "los tres puntos == |H| analitico de la cascada");
+}
+
+void test_eq_nonfinite_mono() {
+    std::cout << "[test] eq: NaN/Inf -> finita y contador; camino mono\n";
+    PassiveEQRef e;
+    PassiveEQRef::Params p;
+    p.boost_db = 6.0;
+    e.set_params(p);
+    e.set_sample_rate(48000);
+    e.prepare();
+    std::vector<float> L{0.5f, std::numeric_limits<float>::quiet_NaN(),
+                         0.25f, std::numeric_limits<float>::infinity(), -0.5f};
+    std::vector<float> R = L;
+    e.process(L.data(), R.data(), L.size());
+    bool all_finite = true;
+    for (float v : L) all_finite = all_finite && std::isfinite(v);
+    for (float v : R) all_finite = all_finite && std::isfinite(v);
+    check(all_finite && e.bad_input_count() == 4,
+          "salidas finitas y contador == 4");
+    // mono
+    PassiveEQRef m;
+    m.set_params(p);
+    m.set_sample_rate(48000);
+    m.prepare();
+    std::vector<float> mono(4800);
+    for (size_t i = 0; i < mono.size(); ++i)
+        mono[i] = float(0.5 * std::sin(2.0 * 3.14159265358979323846 * 1000.0 *
+                                       double(i) / 48000.0));
+    m.process(mono.data(), nullptr, mono.size());
+    bool finite = true;
+    for (float v : mono) finite = finite && std::isfinite(v);
+    check(finite, "salida mono finita");
+}
+
+void test_engine_chain_eq() {
+    std::cout << "[test] engine cadena [fet76, eq]: boost que sobrevive la cadena\n";
+    WavData in = make_sine(48000, 48000, 0.5);   // seno a 1 kHz
+    Engine engine(48000.0, 512);
+    auto fet = std::make_unique<FetAdapter>(Fet76Ref::Params{});  // thresh -18
+    PassiveEQRef::Params peq;
+    peq.freq_hz = 1000.0;                        // refuerzo justo en la señal
+    peq.boost_db = 6.0;
+    auto eq = std::make_unique<PassiveEQAdapter>(peq);
+    engine.add_processor(std::move(fet));        // orden de inserción: fet -> eq
+    engine.add_processor(std::move(eq));
+    FileAudioSource src(in);
+    WavAudioSink sink(48000, 2);
+    RunReport rep;
+    std::string err;
+    check(engine.run(src, sink, rep, err), "corrida de la cadena completa");
+    check(rep.frames_rendered == 48000, "marcos preservados (48000)");
+    const std::string tmp = (std::filesystem::temp_directory_path() /
+                             "deluge_sim_test_chain_eq.wav").string();
+    check(sink.finalize(tmp, err), "sumidero escribe WAV");
+    WavData back;
+    check(read_wav(tmp, back, err) && back.frames() == 48000, "relectura OK");
+    double peak = 0.0;
+    for (float v : back.samples) peak = std::max(peak, double(std::fabs(v)));
+    // fet76 solo dejaría ~0.38; el +6 dB del EQ sobrevive: pico ~0.75
+    check(peak > 0.6 && peak < 0.9,
+          "boost del EQ sobrevive la cadena (pico medido " +
+          std::to_string(peak) + ")");
+    bool finite = true;
+    for (float v : back.samples) finite = finite && std::isfinite(v);
+    check(finite, "salida de la cadena finita");
+}
+
 } // namespace
 
 int main() {
-    std::cout << "deluge-sim :: simtests v0.3\n";
+    std::cout << "deluge-sim :: simtests v0.4\n";
     test_wav_roundtrip();
     test_fet76_no_gr();
     test_fet76_gr_steady();
@@ -657,6 +857,12 @@ int main() {
     test_opto_nonfinite();
     test_opto_mono();
     test_engine_chain_fet_opto();
+    test_eq_dc_unity();
+    test_eq_boost_response_exact();
+    test_eq_cut_response_exact();
+    test_eq_trick_curve();
+    test_eq_nonfinite_mono();
+    test_engine_chain_eq();
     if (g_failures == 0) {
         std::cout << "RESULTADO: TODO OK\n";
         return 0;
