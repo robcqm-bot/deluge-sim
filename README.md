@@ -37,6 +37,19 @@ diffusion and stereo-decorrelated tap groups.
 RAM); chain presets import/export as JSON with a dependency-free mini
 parser; CI gains a Windows MinGW (MSYS2 UCRT64) job.
 
+**v0.8 — q31 bridge + golden vectors (M1 foundation for the firmware suite)**:
+`q31_bridge.hpp/.cpp` converts between this project's float DSP and the
+Deluge firmware's fixed-point world — scale **verified against the real
+firmware** (audio unity = Q2.31, `ONE_Q31`; llround, saturated to
+[-2^31, 2^31-1], +1.0 → INT32_MAX). `simcli golden --engine <name>` emits
+versioned q31 in/out vectors (JSON) for every suite_core engine, and the
+new parity tests measure the firmware-side adapter against them at
+**0 LSB deviation over 960 samples**. Also `scripts/arm_check.sh`:
+repeatable ARM cross-compile check of `suite_core` for the Deluge's
+Cortex-A9 (Cortex-A9 Thumb-2 + VFPv3 hard float, `-fno-exceptions
+-fno-rtti`, no `-ffreestanding` — the firmware is hosted C++).
+Tests: **59 cases / 254 checks**.
+
 **v0.7 — board with SD presets**: the board simulator now reads chain
 presets (`*.json`) from the "SD card" alongside songs, maps them to the
 bottom pad row (click a slot or use ←/→), rebuilds the FX chain from the

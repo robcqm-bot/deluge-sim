@@ -28,3 +28,11 @@
 - [x] Board: persistencia de presets en la SD y slots en la ventana
       ✅ v0.7 (fila 7 de pads + IZQ/DER + S guarda `preset_NN.json`;
       fábrica de fx compartida `fx_factory.hpp`)
+- [x] q31 bridge (float <-> firmware fixed point) + golden vectors CLI +
+      parity tests against the firmware-side adapter
+      ✅ v0.8 (`q31_bridge` unity 2^31 verified vs firmware ONE_Q31;
+      `simcli golden --engine <name>`; parity 0 LSB over 960 samples;
+      59 cases / 254 checks)
+- [x] ARM target verification of suite_core (Deluge Cortex-A9)
+      ✅ v0.8 (`scripts/arm_check.sh`, xPack 13.2.1, Thumb-2 + VFPv3
+      hard float, 5/5 objects 0 warnings)
