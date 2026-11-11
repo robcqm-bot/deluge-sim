@@ -1,7 +1,8 @@
 // =====================================================================
 // deluge-sim / q31_bridge.cpp — float <-> q31 bridge implementation
-// See q31_bridge.hpp for the documented Q2.29 convention (2^29 == 1.0,
-// clamp to +-1.0, lround). Every buffer here is caller-provided: no
+// See q31_bridge.hpp for the documented Q2.31 convention (unity 2^31 ==
+// 2147483648, clamp to +-1.0, llround saturated to int32 with the
+// asymmetric-extremes note). Every buffer here is caller-provided: no
 // allocation, no exceptions.
 // =====================================================================
 #include "deluge_sim/q31_bridge.hpp"

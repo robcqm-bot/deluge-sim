@@ -5,17 +5,21 @@
 // it has NO #include, no main(), and no check() definition of its own.
 // The integrator must add to test_all.cpp:
 //     #include "deluge_sim/q31_bridge.hpp"
-// Documented convention (see q31_bridge.hpp): Q2.29, 2^29 == 1.0;
-// float->q31 = NaN->0, clamp to +-1.0, lround(x * 2^29);
-// q31->float = y / 2^29 (exact power-of-two division).
+// Documented convention (see q31_bridge.hpp): Q2.31, unity 2^31 ==
+// 2147483648; float->q31 = NaN->0, clamp to +-1.0, llround(x * 2^31)
+// saturated to int32 (asymmetric extremes: +1.0 -> INT32_MAX,
+// -1.0 -> INT32_MIN exact);
+// q31->float = y / 2^31 (exact power-of-two division).
 // =====================================================================
 
-// a) EXACT round trip on the Q2.29 grid: k/8 for k=-8..8
+// a) EXACT round trip on the Q2.31 grid: k/8 for k=-8..8
 void test_q31_roundtrip_grid() {
     std::cout << "[test] q31: round-trip EXACTO en la rejilla k/8 (k=-8..8)\n";
-    // k/8 is exactly representable in float, and its q31 image k*2^26 is
-    // an exact integer, so both conversions are exact in IEEE-754 and
-    // the round trip must return the ORIGINAL float bit for bit.
+    // k/8 is exactly representable in float, and its q31 image k*2^28 is
+    // an exact integer (k=+8 saturates to INT32_MAX, one LSB below
+    // unity), so both conversions are exact in IEEE-754 and the round
+    // trip must return the ORIGINAL float bit for bit: for +1.0 the
+    // double 1-2^-31 still rounds back to 1.0f in float precision.
     size_t bad = 0;
     for (int k = -8; k <= 8; ++k) {
         const float x = float(k) / 8.0f;
@@ -24,62 +28,77 @@ void test_q31_roundtrip_grid() {
         if (y != x) ++bad;
     }
     check(bad == 0, "k/8 -> q31 -> float bit-exacto para los 17 valores");
-    // Grid endpoints map to the exact +-2^29 q31 values (symmetric range).
-    check(deluge_sim::float_to_q31(1.0) == 536870912 &&
-              deluge_sim::float_to_q31(-1.0) == -536870912,
-          "+-1.0 -> +-2^29 exactos en q31");
-    check(deluge_sim::float_to_q31(0.5) == 268435456,
-          "0.5 -> 2^28 exacto en q31");
+    // Int32 extremes are ASYMMETRIC: +1.0 scales to +2^31, which is not
+    // representable, and saturates to INT32_MAX (0.99999999953 back);
+    // -1.0 scales to INT32_MIN exactly (documented in q31_bridge.hpp).
+    check(deluge_sim::float_to_q31(1.0) == 2147483647 &&
+              deluge_sim::float_to_q31(-1.0) == -2147483648,
+          "+1.0 -> INT32_MAX 2147483647 (0.99999999953 de vuelta) y "
+              "-1.0 -> INT32_MIN -2147483648 exacto");
+    check(deluge_sim::q31_to_float(2147483647) == 1.0 - deluge_sim::kQ31Lsb,
+          "2147483647 de vuelta == 1 - 1 LSB (0.99999999953, documentado)");
+    check(deluge_sim::float_to_q31(0.5) == 1073741824,
+          "0.5 -> 0.5*2^31 = 1073741824 exacto en q31");
 }
 
-// b) Clamp: anything outside [-1, 1] saturates at +-2^29 -> back to +-1.0
+// b) Clamp: anything outside [-1, 1] saturates at the int32 extremes
 void test_q31_clamp() {
-    std::cout << "[test] q31: clamp a +-1.0 (fuera de rango satura en +-2^29)\n";
-    check(deluge_sim::float_to_q31(1.5) == 536870912,
-          "1.5 -> +2^29 (saturacion documentada)");
-    check(deluge_sim::float_to_q31(-1.5) == -536870912,
-          "-1.5 -> -2^29 (saturacion documentada)");
-    check(deluge_sim::float_to_q31(1e30) == 536870912 &&
-              deluge_sim::float_to_q31(-1e30) == -536870912,
-          "valores gigantes finitos -> +-2^29");
+    std::cout << "[test] q31: clamp a +-1.0 (fuera de rango satura en los "
+                 "extremos int32)\n";
+    check(deluge_sim::float_to_q31(1.5) == 2147483647,
+          "1.5 -> INT32_MAX 2147483647 (saturacion documentada)");
+    check(deluge_sim::float_to_q31(-1.5) == -2147483648,
+          "-1.5 -> INT32_MIN -2147483648 (saturacion documentada)");
+    check(deluge_sim::float_to_q31(1e30) == 2147483647 &&
+              deluge_sim::float_to_q31(-1e30) == -2147483648,
+          "valores gigantes finitos -> extremos int32");
     check(deluge_sim::float_to_q31(
-              std::numeric_limits<float>::infinity()) == 536870912 &&
+              std::numeric_limits<float>::infinity()) == 2147483647 &&
               deluge_sim::float_to_q31(
-                  -std::numeric_limits<float>::infinity()) == -536870912,
-          "+-Inf -> clamp a +-1.0 -> +-2^29");
+                  -std::numeric_limits<float>::infinity()) == -2147483648,
+          "+-Inf -> clamp a +-1.0 -> extremos int32");
     check(deluge_sim::float_to_q31(
               std::numeric_limits<float>::quiet_NaN()) == 0,
           "NaN -> 0 (convencion documentada del harness)");
-    // Round trip of the saturated values: exactly +-1.0 (documented).
+    // Round trip of the saturated values: the negative side returns
+    // -1.0 exactly; the positive side returns 1-2^-31 as double, which
+    // narrows to exactly 1.0f in float precision (documented).
     check(float(deluge_sim::q31_to_float(deluge_sim::float_to_q31(1.5))) == 1.0f &&
               float(deluge_sim::q31_to_float(deluge_sim::float_to_q31(-1.5))) == -1.0f,
-          "round-trip de +-1.5 -> exactamente +-1.0");
+          "round-trip de +-1.5 -> 1.0f (via 1-2^-31) y -1.0 exacto");
 }
 
-// c) Exact symmetry: q31(-x) == -q31(x), including +-1.0
+// c) Symmetry: q31(-x) == -q31(x) for |x| < 1.0; asymmetric extremes
 void test_q31_symmetry() {
-    std::cout << "[test] q31: simetria exacta q31(-x) == -q31(x) (incluye +-1.0)\n";
-    // The bridge range is [-2^29, +2^29]: FULLY symmetric. Unlike raw
-    // int32 q31 (minimum with no positive counterpart), here -1.0 ->
-    // -2^29 and +1.0 -> +2^29 are both representable, so NO asymmetric
-    // special case exists (documented in q31_bridge.hpp).
+    std::cout << "[test] q31: simetria q31(-x) == -q31(x) para |x| < 1.0 "
+                 "(extremos int32 asimetricos)\n";
+    // Round-half-away-from-zero is odd, so symmetry holds EXACTLY for
+    // every |x| < 1.0 (including values one LSB below unity). It BREAKS
+    // at the extremes: +1.0 saturates to INT32_MAX (2^31 is not
+    // representable) while -1.0 maps to INT32_MIN exactly, so
+    // q31(-1.0) == -q31(1.0) - 1 (documented in q31_bridge.hpp).
     size_t bad = 0;
-    for (int k = -16; k <= 16; ++k) {
+    for (int k = -15; k <= 15; ++k) {            // interior of the k/16 grid
         const double x = double(k) / 16.0;
         if (deluge_sim::float_to_q31(-x) != -deluge_sim::float_to_q31(x)) ++bad;
     }
-    for (double x : {0.5, -0.5, 0.123456, -0.123456, 0.9999999, 1.0, -1.0}) {
+    const double under = 1.0 - deluge_sim::kQ31Lsb;  // last representable
+    for (double x : {0.5, -0.5, 0.123456, -0.123456, 0.9999999, -0.9999999,
+                     under, -under}) {
         if (deluge_sim::float_to_q31(-x) != -deluge_sim::float_to_q31(x)) ++bad;
     }
-    check(bad == 0, "q31(-x) == -q31(x) en toda la sonda (sin caso especial)");
+    check(bad == 0, "q31(-x) == -q31(x) en todo el interior (|x| < 1.0)");
+    check(deluge_sim::float_to_q31(-1.0) == -deluge_sim::float_to_q31(1.0) - 1,
+          "extremos asimetricos: q31(-1.0) == -q31(1.0) - 1 (INT32_MIN sin "
+              "contrapartida positiva)");
 }
 
-// d) 0.5-peak sine through the round trip: max error <= 1 LSB of Q2.29
+// d) 0.5-peak sine through the round trip: max error <= 1 LSB of Q2.31
 void test_q31_sine_1lsb() {
-    std::cout << "[test] q31: seno 0.5 ida-y-vuelta, error <= 1 LSB de Q2.29\n";
-    // Quantization to nearest with lround contributes at most 0.5 LSB;
+    std::cout << "[test] q31: seno 0.5 ida-y-vuelta, error <= 1 LSB de Q2.31\n";
+    // Quantization to nearest with llround contributes at most 0.5 LSB;
     // the 1 LSB bound leaves margin for the float narrowing on the way
-    // back. 1 LSB = 1/2^29 ~ 1.8626e-9.
+    // back. 1 LSB = 1/2^31 ~ 4.6566e-10.
     WavData w = make_sine(48000, 4800, 0.5);
     double max_err = 0.0;
     for (size_t i = 0; i < w.samples.size(); ++i) {

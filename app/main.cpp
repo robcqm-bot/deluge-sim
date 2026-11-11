@@ -11,7 +11,7 @@
 //                 [k=v ...]
 //       renders a deterministic test signal (stereo 1 kHz sine, peak
 //       0.5) through ONE engine instance (default params + k=v) and
-//       writes golden vectors as JSON: input/output interleaved Q2.29
+//       writes golden vectors as JSON: input/output interleaved Q2.31
 //       int32 + sample rate + engine + effective params. The firmware
 //       must reproduce output_q31 EXACTLY from input_q31 (see M1).
 //   simcli help
@@ -65,7 +65,7 @@ void print_usage() {
         "  simcli preset --save FILE [--chain a,b] [k=v ...] | --load FILE\n"
         "  simcli golden --engine tape|fet76|opto|eq|plate --frames N"
         " --out FILE [k=v ...]\n"
-        "    vectores dorados Q2.29 (JSON): seno 1 kHz 0.5 estéreo,"
+        "    vectores dorados Q2.31 (JSON): seno 1 kHz 0.5 estéreo,"
         " una instancia del motor,\n"
         "    params por defecto (+k=v, solo claves del motor); N se"
         " recorta a [128,48000]\n"
@@ -376,7 +376,7 @@ int cmd_preset(int argc, char** argv) {
 //     "frames": 480,
 //     "channels": 2,
 //     "block": 512,                       // render cadence (kDefaultMaxBlock)
-//     "q31_scale": 536870912,             // 2^29 == 1.0 (Q2.29, see
+//     "q31_scale": 2147483648,            // 2^31 == 1.0 (Q2.31, see
 //                                         // deluge_sim/q31_bridge.hpp)
 //     "test_signal": "stereo sine 1000 Hz peak 0.5 phase 0",
 //     "params": { "drive_db": 6, ... },   // EFFECTIVE params used
@@ -537,7 +537,7 @@ int cmd_golden(int argc, char** argv) {
     }
     std::cout << "OK  golden: " << out << " (engine=" << engine
               << ", frames=" << frames
-              << ", entrada/salida Q2.29 intercaladas)\n";
+              << ", entrada/salida Q2.31 intercaladas)\n";
     return 0;
 }
 

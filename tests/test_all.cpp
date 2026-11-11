@@ -1144,6 +1144,7 @@ void test_engine_chain_plate() {
 #include "test_preset.inc"
 #include "test_board_preset.inc"
 #include "test_q31_bridge.inc"
+#include "test_golden_parity.inc"
 
 } // namespace
 
@@ -1206,6 +1207,8 @@ int main() {
     test_q31_symmetry();
     test_q31_sine_1lsb();
     test_q31_interleave_planar();
+    test_golden_tape_parity();
+    test_golden_scale_documented();
     if (g_failures == 0) {
         std::cout << "RESULTADO: TODO OK\n";
         return 0;
